@@ -5,6 +5,7 @@ from minicode_agent.core.state import AgentPhase, AgentState, RunMetrics, TaskSt
 from minicode_agent.agent.planner import ModelDecision, ModelDrivenPlanner, PlannedAction, RuleBasedPlanner
 from minicode_agent.models import ModelClient
 from minicode_agent.runtime import RuntimeContext
+from minicode_agent.skills import SkillDefinition, SkillError, SkillRegistry, SkillRouter
 from minicode_agent.tools.executor import ToolExecutor
 from minicode_agent.tools.registry import create_default_registry
 from minicode_agent.tools.types import ToolContext, ToolObservation
@@ -58,6 +59,9 @@ class AgentLoop:
         self.observations: list[dict[str, Any]] = []
         self.max_failed_tool_attempts = max_failed_tool_attempts
         self.loop_turns = 0
+        self.skill_registry = SkillRegistry()
+        self.skill_router = SkillRouter(self.skill_registry)
+        self.active_skills: list[SkillDefinition] = []
 
     def run(self) -> AgentRunResult:
         self.runtime.trace_store.append(
@@ -76,10 +80,23 @@ class AgentLoop:
         self._observe("context_loaded", {"workspace": self.state.workspace, "known_files": known_files[:20]})
 
         self._phase(AgentPhase.SELECT_SKILL, "Select a skill for the task.")
-        selected_skill = self.rule_planner.select_skill(self.state.user_goal)
-        if selected_skill:
-            self.state.selected_skills = [selected_skill]
-        self._observe("skill_selected", {"skills": self.state.selected_skills})
+        route_result = self.skill_router.route(self.state.user_goal)
+        self.state.selected_skills = route_result.selected
+        self.state.skill_candidates = [
+            {"name": candidate.name, "score": candidate.score, "reasons": candidate.reasons}
+            for candidate in route_result.candidates
+        ]
+        self.state.skill_route_reasons = route_result.reasons
+        if self.state.selected_skills:
+            self._load_active_skills()
+        self._observe(
+            "skill_selected",
+            {
+                "skills": self.state.selected_skills,
+                "candidates": self.state.skill_candidates,
+                "reasons": self.state.skill_route_reasons,
+            },
+        )
 
         self._phase(AgentPhase.PLAN, "Draft a short plan.")
         if self.model_planner:
@@ -276,6 +293,7 @@ class AgentLoop:
                 self.state.user_goal,
                 known_files,
                 observations=self.observations,
+                skills=self.active_skills,
                 turn_index=turn_index,
                 failed_tool_attempts=failed_tool_attempts,
             )
@@ -286,10 +304,22 @@ class AgentLoop:
             return None
         if decision.selected_skill:
             self.state.selected_skills = [decision.selected_skill]
+            self._load_active_skills()
         self.state.task_state.next_actions = decision.next_actions
         self.state.metrics.input_tokens += decision.input_tokens
         self.state.metrics.output_tokens += decision.output_tokens
         return decision
+
+    def _load_active_skills(self) -> None:
+        active: list[SkillDefinition] = []
+        for skill_name in self.state.selected_skills:
+            try:
+                active.append(self.skill_registry.get(skill_name))
+            except SkillError as exc:
+                self.failure_reason = str(exc)
+                self.state.task_state.failed_attempts.append(str(exc))
+                self._observe("skill_load_failed", {"skill": skill_name, "reason": str(exc)})
+        self.active_skills = active
 
     def _phase(self, phase: AgentPhase, reason: str) -> None:
         self.state.current_phase = phase

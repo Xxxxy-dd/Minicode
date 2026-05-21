@@ -59,4 +59,21 @@ def test_agent_loop_selects_test_writing_skill(tmp_path) -> None:
 
     result = AgentLoop(runtime, "add unit test for parser").run()
 
-    assert result.state.selected_skills == ["test-writing"]
+    assert "test-writing" in result.state.selected_skills
+
+
+def test_agent_loop_records_skill_route_reasons(tmp_path) -> None:
+    (tmp_path / "README.md").write_text("# Demo\n", encoding="utf-8")
+    runtime = RuntimeContext.create(tmp_path, run_id="agent_skill_route_test")
+
+    result = AgentLoop(runtime, "review this diff").run()
+
+    assert result.state.selected_skills == ["code-review"]
+    assert result.state.skill_candidates[0]["name"] == "code-review"
+    assert result.state.skill_route_reasons["code-review"]
+    skill_events = [event for event in result.transcript if event["event"] == "skill_selected"]
+    assert skill_events
+    assert skill_events[0]["payload"]["reasons"]["code-review"]
+    trace_events = runtime.trace_store.list_events("agent_skill_route_test")
+    traced_skill = [event for event in trace_events if event.event_type == "skill_selected"]
+    assert traced_skill[0].payload["candidates"][0]["name"] == "code-review"

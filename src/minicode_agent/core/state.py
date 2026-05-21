@@ -44,6 +44,8 @@ class AgentState(BaseModel):
     user_goal: str
     current_phase: AgentPhase = AgentPhase.INIT
     selected_skills: list[str] = Field(default_factory=list)
+    skill_candidates: list[dict] = Field(default_factory=list)
+    skill_route_reasons: dict[str, list[str]] = Field(default_factory=dict)
     task_state: TaskState
     tool_history: list[str] = Field(default_factory=list)
     files_touched: list[str] = Field(default_factory=list)

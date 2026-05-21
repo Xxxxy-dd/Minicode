@@ -3,7 +3,10 @@ import json
 from typing import Any
 
 from minicode_agent.models.client import ModelMessage
+from minicode_agent.skills import SkillDefinition
 from minicode_agent.tools.registry import ToolRegistry
+
+MAX_SKILL_CONTENT_CHARS = 1200
 
 
 def build_planning_prompt(
@@ -11,6 +14,7 @@ def build_planning_prompt(
     known_files: list[str],
     registry: ToolRegistry,
     observations: list[dict[str, Any]] | None = None,
+    skills: list[SkillDefinition] | None = None,
 ) -> list[ModelMessage]:
     tools = [
         {
@@ -32,6 +36,7 @@ def build_planning_prompt(
         "goal": goal,
         "known_files": known_files[:50],
         "recent_observations": (observations or [])[-10:],
+        "active_skills": [skill_prompt_payload(skill) for skill in (skills or [])],
         "available_tools": tools,
         "response_example": {
             "summary": "Inspect project documentation first.",
@@ -54,3 +59,20 @@ def build_planning_prompt(
         ModelMessage(role="system", content=system),
         ModelMessage(role="user", content=json.dumps(user_payload, ensure_ascii=False, indent=2)),
     ]
+
+
+def skill_prompt_payload(skill: SkillDefinition) -> dict[str, Any]:
+    return {
+        "name": skill.name,
+        "description": skill.metadata.description,
+        "tags": skill.metadata.tags,
+        "applies_to": skill.metadata.applies_to,
+        "aliases": skill.metadata.aliases,
+        "content": truncate_skill_content(skill.content),
+    }
+
+
+def truncate_skill_content(content: str) -> str:
+    if len(content) <= MAX_SKILL_CONTENT_CHARS:
+        return content
+    return content[:MAX_SKILL_CONTENT_CHARS] + "\n[truncated]"

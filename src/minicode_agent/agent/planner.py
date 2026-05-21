@@ -3,6 +3,7 @@ from time import perf_counter
 from typing import Any
 
 from minicode_agent.models import ModelClient, ModelResponse, build_planning_prompt, parse_model_plan
+from minicode_agent.skills import SkillDefinition
 from minicode_agent.trace.store import TraceStore
 from minicode_agent.tools.registry import ToolRegistry
 
@@ -80,10 +81,11 @@ class ModelDrivenPlanner:
         goal: str,
         known_files: list[str],
         observations: list[dict[str, Any]] | None = None,
+        skills: list[SkillDefinition] | None = None,
         turn_index: int | None = None,
         failed_tool_attempts: int = 0,
     ) -> ModelDecision:
-        messages = build_planning_prompt(goal, known_files, self.registry, observations=observations)
+        messages = build_planning_prompt(goal, known_files, self.registry, observations=observations, skills=skills)
         started_at = perf_counter()
         self._trace(
             "model_requested",
@@ -91,6 +93,7 @@ class ModelDrivenPlanner:
                 "messages": len(messages),
                 "known_files": len(known_files),
                 "observation_count": len(observations or []),
+                "skill_count": len(skills or []),
                 "turn": turn_index,
                 "failed_tool_attempts": failed_tool_attempts,
             },

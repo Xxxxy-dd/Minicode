@@ -6,7 +6,7 @@ The first milestone focuses on a clean Python project skeleton and stable module
 
 ## Current Status
 
-Day 8 query loop v2 is available:
+Day 10 skill routing is available:
 
 - CLI entrypoint
 - configuration model
@@ -35,6 +35,14 @@ Day 8 query loop v2 is available:
 - real tool outputs injected into later model turns
 - model stop policy with final answers
 - configurable retry limit for failed tool calls
+- skill metadata and markdown loader
+- built-in skills: `debugging`, `test-writing`, `code-review`
+- `minicode skills list` and `minicode skills show`
+- `minicode skills route` for route debugging
+- active skill content injected into model planning prompts
+- deterministic metadata-based skill router
+- top-k skill injection with traceable route reasons
+- Chinese and English skill aliases
 - mock model tests for model planning
 - package layout
 - smoke tests, read-only tool tests, permission tests, write tool tests, shell tool tests, trace tests, agent loop tests, model planning tests, and OpenAI-compatible adapter tests
@@ -45,6 +53,9 @@ Day 8 query loop v2 is available:
 minicode run "fix the failing tests"
 minicode run "inspect project" --model gpt-4.1-mini
 minicode run "inspect project" --no-model
+minicode skills list
+minicode skills show debugging
+minicode skills route "审查 diff"
 minicode tools list
 minicode tools run read_file --path README.md
 minicode tools run write_file --path notes.txt --content "hello" --approved
@@ -72,7 +83,10 @@ MINICODE_MODEL_BASE_URL=https://api.openai.com/v1
 Model-backed runs use the multi-step query loop. Rule-planner runs remain a
 single safe action for deterministic local demos. `max_agent_steps` bounds model
 turns and tool calls; `max_failed_tool_attempts` bounds repeated failed tool
-calls before the run fails.
+calls before the run fails. Skill routing uses deterministic metadata and
+keyword recall with English and Chinese aliases. Route candidates and reasons
+are stored on `AgentState` and in trace events. Optional LLM reranking is
+intentionally left for a later polishing pass.
 
 ## Design Spec
 

@@ -1,0 +1,21 @@
+name: debugging
+description: Diagnose failing behavior with evidence before changing code.
+tags:
+  - bug
+  - failure
+  - tests
+applies_to:
+  - failing tests
+  - runtime errors
+  - unexpected behavior
+examples:
+  - fix failing pytest tests
+  - investigate a traceback
+aliases:
+  - pytest
+  - traceback
+  - failing tests
+  - bug
+  - 修复
+  - 报错
+  - 失败

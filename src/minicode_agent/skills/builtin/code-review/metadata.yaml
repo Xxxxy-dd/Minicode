@@ -1,0 +1,21 @@
+name: code-review
+description: Review code for correctness, regressions, risk, and missing tests.
+tags:
+  - review
+  - audit
+  - quality
+applies_to:
+  - code review
+  - diff audit
+  - risk assessment
+examples:
+  - review the latest diff
+  - audit this module for bugs
+aliases:
+  - diff
+  - review
+  - audit
+  - regression risk
+  - 审查
+  - 评审
+  - 代码审查

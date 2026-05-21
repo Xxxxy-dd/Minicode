@@ -1,0 +1,21 @@
+name: test-writing
+description: Add or improve focused tests that describe expected behavior.
+tags:
+  - tests
+  - coverage
+  - validation
+applies_to:
+  - missing unit tests
+  - regression tests
+  - behavior changes
+examples:
+  - add unit tests for parser
+  - cover edge cases for permissions
+aliases:
+  - unit test
+  - regression test
+  - coverage
+  - pytest
+  - 测试
+  - 单测
+  - 覆盖

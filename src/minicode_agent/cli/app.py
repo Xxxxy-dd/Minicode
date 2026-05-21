@@ -8,6 +8,7 @@ from rich.table import Table
 from minicode_agent.agent import AgentLoop
 from minicode_agent.config import MiniCodeConfig
 from minicode_agent.models import OpenAICompatibleClient
+from minicode_agent.skills import SkillError, SkillRegistry, SkillRouter
 from minicode_agent.trace import TraceStore, default_trace_db_path
 from minicode_agent.runtime import RuntimeContext
 from minicode_agent.tools.executor import ToolExecutor
@@ -21,7 +22,9 @@ app = typer.Typer(
 )
 console = Console()
 tools_app = typer.Typer(help="Inspect and run MiniCode tools.")
+skills_app = typer.Typer(help="Inspect MiniCode skills.")
 app.add_typer(tools_app, name="tools")
+app.add_typer(skills_app, name="skills")
 
 
 @app.command()
@@ -140,6 +143,62 @@ def list_tools() -> None:
             tool.spec.permission.value,
             tool.spec.description,
         )
+    console.print(table)
+
+
+@skills_app.command("list")
+def list_skills() -> None:
+    """List built-in skills."""
+    registry = SkillRegistry()
+    table = Table(title="MiniCode Skills")
+    table.add_column("Name")
+    table.add_column("Tags")
+    table.add_column("Description")
+    for skill in registry.list():
+        table.add_row(
+            skill.name,
+            ", ".join(skill.metadata.tags),
+            skill.metadata.description,
+        )
+    console.print(table)
+
+
+@skills_app.command("show")
+def show_skill(name: str = typer.Argument(..., help="Skill name to show.")) -> None:
+    """Show a skill's metadata and content."""
+    registry = SkillRegistry()
+    try:
+        skill = registry.get(name)
+    except SkillError as exc:
+        console.print(f"[red]Skill failed:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+    console.print(f"[bold cyan]{skill.name}[/bold cyan]")
+    console.print(f"Description: {skill.metadata.description}")
+    console.print(f"Tags: {', '.join(skill.metadata.tags)}")
+    console.print(f"Applies to: {', '.join(skill.metadata.applies_to)}")
+    console.print()
+    console.print(skill.content, markup=False)
+
+
+@skills_app.command("route")
+def route_skill(task: str = typer.Argument(..., help="Task text to route.")) -> None:
+    """Show deterministic skill routing for a task."""
+    result = SkillRouter().route(task)
+    table = Table(title="MiniCode Skill Route")
+    table.add_column("Selected")
+    table.add_column("Skill")
+    table.add_column("Score")
+    table.add_column("Reasons")
+    for candidate in result.candidates:
+        table.add_row(
+            "*" if candidate.name in result.selected else "",
+            candidate.name,
+            str(candidate.score),
+            "; ".join(candidate.reasons),
+        )
+    if not result.candidates:
+        console.print("[dim]No matching skills.[/dim]")
+        return
     console.print(table)
 
 

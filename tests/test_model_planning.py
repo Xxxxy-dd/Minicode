@@ -4,6 +4,7 @@ from minicode_agent.agent import AgentLoop
 from minicode_agent.core.state import AgentPhase
 from minicode_agent.models import ModelMessage, ModelResponse, build_planning_prompt, parse_model_plan
 from minicode_agent.runtime import RuntimeContext
+from minicode_agent.skills import SkillRegistry
 from minicode_agent.tools.registry import create_default_registry
 
 
@@ -36,16 +37,22 @@ def test_parse_model_plan_requires_final_answer_when_stopping() -> None:
 
 
 def test_build_planning_prompt_includes_tools_and_limits_files() -> None:
+    debugging = SkillRegistry().get("debugging")
     messages = build_planning_prompt(
         "inspect",
         [f"file_{index}.py" for index in range(60)],
         create_default_registry(),
         observations=[{"tool": "read_file", "ok": True, "result": "done"}],
+        skills=[debugging],
     )
 
     assert [message.role for message in messages] == ["system", "user"]
     assert "Return only JSON" in messages[0].content
     assert '"recent_observations"' in messages[1].content
+    assert '"active_skills"' in messages[1].content
+    assert "Debugging" in messages[1].content
+    assert '"aliases"' in messages[1].content
+    assert "失败" in messages[1].content
     assert '"available_tools"' in messages[1].content
     assert '"risk_level"' in messages[1].content
     assert '"permission"' in messages[1].content
@@ -90,10 +97,14 @@ def test_agent_loop_uses_mock_model_planner(tmp_path) -> None:
     assert result.state.metrics.output_tokens == 16
     assert model.messages[0][0].role == "system"
     assert "available_tools" in model.messages[0][1].content
+    assert "Debugging" in model.messages[0][1].content
     assert "README.md was read." in result.state.task_state.decisions
     planned = [event for event in result.transcript if event["event"] == "agent_planned"]
     assert planned[0]["payload"]["planner"] == "model"
     assert planned[-1]["payload"]["stop"] is True
+    events = runtime.trace_store.list_events("agent_model_test")
+    first_model_request = next(event for event in events if event.event_type == "model_requested")
+    assert first_model_request.payload["skill_count"] >= 1
 
 
 def test_agent_loop_records_model_planning_failure(tmp_path) -> None:

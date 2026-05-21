@@ -1,4 +1,5 @@
 from pathlib import Path
+import os
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -13,6 +14,18 @@ class MiniCodeConfig(BaseModel):
     max_agent_steps: int = 30
     max_subagent_steps: int = 8
     require_approval_for_writes: bool = True
+    model_name: str | None = None
+    model_base_url: str = "https://api.openai.com/v1"
+    model_api_key: str | None = None
+
+    @classmethod
+    def from_env(cls, workspace: Path) -> "MiniCodeConfig":
+        return cls(
+            workspace=workspace,
+            model_name=os.getenv("MINICODE_MODEL") or os.getenv("OPENAI_MODEL"),
+            model_base_url=os.getenv("MINICODE_MODEL_BASE_URL", "https://api.openai.com/v1"),
+            model_api_key=os.getenv("MINICODE_MODEL_API_KEY") or os.getenv("OPENAI_API_KEY"),
+        )
 
     @field_validator("workspace")
     @classmethod

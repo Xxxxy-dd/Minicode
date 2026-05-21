@@ -2,7 +2,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from minicode_agent.core.state import AgentPhase, AgentState, RunMetrics, TaskState
-from minicode_agent.agent.planner import RuleBasedPlanner
+from minicode_agent.agent.planner import ModelDrivenPlanner, PlannedAction, RuleBasedPlanner
+from minicode_agent.models import ModelClient
 from minicode_agent.runtime import RuntimeContext
 from minicode_agent.tools.executor import ToolExecutor
 from minicode_agent.tools.registry import create_default_registry
@@ -18,7 +19,13 @@ class AgentRunResult:
 class AgentLoop:
     """Minimal rule-driven agent loop for day 6."""
 
-    def __init__(self, runtime: RuntimeContext, goal: str, max_steps: int = 30) -> None:
+    def __init__(
+        self,
+        runtime: RuntimeContext,
+        goal: str,
+        max_steps: int = 30,
+        model_client: ModelClient | None = None,
+    ) -> None:
         self.runtime = runtime
         self.max_steps = max_steps
         self.steps = 0
@@ -31,12 +38,18 @@ class AgentLoop:
             metrics=RunMetrics(),
         )
         self.transcript: list[dict[str, Any]] = []
+        registry = create_default_registry()
         self.executor = ToolExecutor(
-            create_default_registry(),
+            registry,
             trace_store=runtime.trace_store,
             run_id=runtime.run_id,
         )
-        self.planner = RuleBasedPlanner()
+        self.rule_planner = RuleBasedPlanner()
+        self.model_planner = (
+            ModelDrivenPlanner(model_client, registry, trace_store=runtime.trace_store, run_id=runtime.run_id)
+            if model_client
+            else None
+        )
         self.failure_reason: str | None = None
 
     def run(self) -> AgentRunResult:
@@ -56,18 +69,23 @@ class AgentLoop:
         self._observe("context_loaded", {"workspace": self.state.workspace, "known_files": known_files[:20]})
 
         self._phase(AgentPhase.SELECT_SKILL, "Select a skill for the task.")
-        selected_skill = self.planner.select_skill(self.state.user_goal)
+        selected_skill = self.rule_planner.select_skill(self.state.user_goal)
         if selected_skill:
             self.state.selected_skills = [selected_skill]
         self._observe("skill_selected", {"skills": self.state.selected_skills})
 
         self._phase(AgentPhase.PLAN, "Draft a short plan.")
-        plan = self.planner.plan_steps(self.state.user_goal)
-        self.state.task_state.next_actions = plan
-        planned_action = self.planner.next_action(self.state.user_goal, known_files)
+        planned_action = self._plan_action(known_files)
+        if planned_action is None:
+            return self._finish(False)
         self._observe(
             "agent_planned",
-            {"next_actions": plan, "tool": planned_action.tool, "description": planned_action.description},
+            {
+                "next_actions": self.state.task_state.next_actions,
+                "tool": planned_action.tool,
+                "description": planned_action.description,
+                "planner": "model" if self.model_planner else "rules",
+            },
         )
 
         self._phase(AgentPhase.ACT, "Take a small safe action.")
@@ -85,6 +103,9 @@ class AgentLoop:
         self._reflect()
         self._observe("reflection", {"files_touched": self.state.files_touched})
 
+        return self._finish(verified)
+
+    def _finish(self, verified: bool) -> AgentRunResult:
         final_phase = AgentPhase.DONE if verified else AgentPhase.FAILED
         self._phase(final_phase, "Finish the run.")
         self.runtime.trace_store.append(
@@ -137,6 +158,26 @@ class AgentLoop:
 
     def _reflect(self) -> None:
         self.state.task_state.decisions.append("Keep the first loop minimal and traceable.")
+
+    def _plan_action(self, known_files: list[str]) -> PlannedAction | None:
+        if not self.model_planner:
+            self.state.task_state.next_actions = self.rule_planner.plan_steps(self.state.user_goal)
+            return self.rule_planner.next_action(self.state.user_goal, known_files)
+
+        try:
+            planned_action = self.model_planner.plan(self.state.user_goal, known_files)
+        except Exception as exc:
+            self.failure_reason = str(exc)
+            self.state.task_state.failed_attempts.append(str(exc))
+            self._observe("planning_failed", {"reason": str(exc), "planner": "model"})
+            return None
+        if self.model_planner.selected_skill:
+            self.state.selected_skills = [self.model_planner.selected_skill]
+        self.state.task_state.next_actions = self.model_planner.next_actions
+        if self.model_planner.last_response:
+            self.state.metrics.input_tokens += self.model_planner.last_response.input_tokens
+            self.state.metrics.output_tokens += self.model_planner.last_response.output_tokens
+        return planned_action
 
     def _phase(self, phase: AgentPhase, reason: str) -> None:
         self.state.current_phase = phase

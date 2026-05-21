@@ -7,6 +7,7 @@ from rich.table import Table
 
 from minicode_agent.agent import AgentLoop
 from minicode_agent.config import MiniCodeConfig
+from minicode_agent.models import OpenAICompatibleClient
 from minicode_agent.trace import TraceStore, default_trace_db_path
 from minicode_agent.runtime import RuntimeContext
 from minicode_agent.tools.executor import ToolExecutor
@@ -32,16 +33,36 @@ def run(
         "-w",
         help="Workspace directory for the agent run.",
     ),
+    model: str | None = typer.Option(None, "--model", help="OpenAI-compatible model name to use."),
+    model_base_url: str | None = typer.Option(None, "--model-base-url", help="OpenAI-compatible API base URL."),
+    no_model: bool = typer.Option(False, "--no-model", help="Use the deterministic rule planner even if model env vars are set."),
 ) -> None:
     """Start a single coding-agent run."""
-    config = MiniCodeConfig(workspace=workspace)
+    config = MiniCodeConfig.from_env(workspace)
+    if model or model_base_url:
+        config = config.model_copy(
+            update={
+                "model_name": model or config.model_name,
+                "model_base_url": model_base_url or config.model_base_url,
+            }
+        )
+    if no_model:
+        config = config.model_copy(update={"model_name": None})
     runtime = RuntimeContext.create(config.workspace, run_kind="agent")
-    result = AgentLoop(runtime, task, max_steps=config.max_agent_steps).run()
+    model_client = None
+    if config.model_name:
+        model_client = OpenAICompatibleClient(
+            model=config.model_name,
+            api_key=config.model_api_key,
+            base_url=config.model_base_url,
+        )
+    result = AgentLoop(runtime, task, max_steps=config.max_agent_steps, model_client=model_client).run()
     console.print("[bold cyan]MiniCode Agent[/bold cyan]")
     console.print(f"run_id: {runtime.run_id}")
     console.print(f"trace_backend: {runtime.trace_store.backend} ({runtime.trace_store.storage_path})")
     console.print(f"Workspace: {config.workspace}")
     console.print(f"Task: {task}")
+    console.print(f"Planner: {'model' if model_client else 'rules'}")
     console.print(f"Final phase: {result.state.current_phase.value}")
     console.print(f"Selected skills: {', '.join(result.state.selected_skills) or '(none)'}")
     console.print(f"Tool calls: {result.state.metrics.tool_calls}")

@@ -6,7 +6,7 @@ The first milestone focuses on a clean Python project skeleton and stable module
 
 ## Current Status
 
-Day 6 optimized agent loop is available:
+Day 7 model adapter layer is available:
 
 - CLI entrypoint
 - configuration model
@@ -26,13 +26,21 @@ Day 6 optimized agent loop is available:
 - planner abstraction, run_started trace, runtime context, and max-step support
 - approval-required handling for medium/high-risk tools
 - deny handling for blocked tools
+- model client interface
+- OpenAI-compatible chat completions adapter
+- stable planning prompt builder
+- structured model response parser
+- optional model-driven planner for `minicode run`
+- mock model tests for model planning
 - package layout
-- smoke tests, read-only tool tests, permission tests, write tool tests, shell tool tests, trace tests, and agent loop tests
+- smoke tests, read-only tool tests, permission tests, write tool tests, shell tool tests, trace tests, agent loop tests, and model planning tests
 
 ## Planned CLI
 
 ```bash
 minicode run "fix the failing tests"
+minicode run "inspect project" --model gpt-4.1-mini
+minicode run "inspect project" --no-model
 minicode tools list
 minicode tools run read_file --path README.md
 minicode tools run write_file --path notes.txt --content "hello" --approved
@@ -45,6 +53,17 @@ minicode trace
 minicode trace <run_id> --json
 minicode eval examples/tasks
 ```
+
+Model-backed runs use OpenAI-compatible chat completions. Prefer MiniCode-specific
+environment variables:
+
+```bash
+MINICODE_MODEL=gpt-4.1-mini
+MINICODE_MODEL_API_KEY=...
+MINICODE_MODEL_BASE_URL=https://api.openai.com/v1
+```
+
+`OPENAI_MODEL` and `OPENAI_API_KEY` are also accepted as compatibility fallbacks.
 
 ## Design Spec
 

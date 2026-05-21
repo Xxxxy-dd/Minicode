@@ -1,4 +1,5 @@
 import fnmatch
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,11 @@ DEFAULT_EXCLUDES = {
     "dist",
     "*.egg-info",
 }
+
+WINDOWS_GIT_CANDIDATES = (
+    Path(r"C:\Program Files\Git\cmd\git.exe"),
+    Path(r"C:\Program Files\Git\bin\git.exe"),
+)
 
 
 def resolve_workspace_path(workspace: Path, requested_path: str | None = None) -> Path:
@@ -151,8 +157,9 @@ class GitDiffTool(BaseTool):
 
 
 def run_git(workspace: Path, args: list[str]) -> tuple[str, dict[str, Any]]:
+    git_executable = find_git_executable()
     completed = subprocess.run(
-        ["git", *args],
+        [str(git_executable), *args],
         cwd=workspace,
         capture_output=True,
         text=True,
@@ -163,4 +170,22 @@ def run_git(workspace: Path, args: list[str]) -> tuple[str, dict[str, Any]]:
     error = completed.stderr.strip()
     if completed.returncode != 0:
         raise ToolError(error or f"git {' '.join(args)} failed with exit code {completed.returncode}")
-    return output, {"exit_code": completed.returncode, "command": f"git {' '.join(args)}"}
+    return output, {
+        "exit_code": completed.returncode,
+        "command": f"git {' '.join(args)}",
+        "git_executable": str(git_executable),
+    }
+
+
+def find_git_executable() -> Path:
+    candidate = shutil.which("git")
+    if candidate:
+        path = Path(candidate)
+        if path.is_file():
+            return path
+
+    for path in WINDOWS_GIT_CANDIDATES:
+        if path.is_file():
+            return path
+
+    raise ToolError("git executable not found. Install Git or configure PATH.")

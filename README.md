@@ -6,7 +6,7 @@ The first milestone focuses on a clean Python project skeleton and stable module
 
 ## Current Status
 
-Day 1 read-only Tool Runtime is available:
+Day 2 permission gateway is available:
 
 - CLI entrypoint
 - configuration model
@@ -14,8 +14,12 @@ Day 1 read-only Tool Runtime is available:
 - tool interface models
 - tool registry
 - read-only tools: `list_files`, `read_file`, `search_code`, `git_status`, `git_diff`
+- permission gateway
+- path sandbox for workspace-bound tool arguments
+- approval-required handling for medium/high-risk tools
+- deny handling for blocked tools
 - package layout
-- smoke tests and read-only tool tests
+- smoke tests, read-only tool tests, and permission tests
 
 ## Planned CLI
 

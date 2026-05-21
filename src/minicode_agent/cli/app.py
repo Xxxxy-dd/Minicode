@@ -5,6 +5,7 @@ from rich.console import Console
 from rich.table import Table
 
 from minicode_agent.config import MiniCodeConfig
+from minicode_agent.tools.executor import ToolExecutor
 from minicode_agent.tools.registry import create_default_registry
 from minicode_agent.tools.types import ToolContext
 
@@ -84,7 +85,7 @@ def run_tool(
 ) -> None:
     """Run a registered read-only tool."""
     registry = create_default_registry()
-    tool = registry.get(name)
+    executor = ToolExecutor(registry)
     arguments = {
         "path": path,
         "pattern": pattern,
@@ -92,7 +93,7 @@ def run_tool(
         "max_matches": max_matches,
         "stat": stat,
     }
-    observation = tool.run(ToolContext(workspace=workspace), arguments)
+    observation = executor.execute(name, ToolContext(workspace=workspace), arguments)
     if observation.ok:
         if observation.output:
             console.print(observation.output)

@@ -5,6 +5,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
+from minicode_agent.agent import AgentLoop
 from minicode_agent.config import MiniCodeConfig
 from minicode_agent.trace import TraceStore, default_trace_db_path
 from minicode_agent.runtime import RuntimeContext
@@ -34,10 +35,16 @@ def run(
 ) -> None:
     """Start a single coding-agent run."""
     config = MiniCodeConfig(workspace=workspace)
+    runtime = RuntimeContext.create(config.workspace, run_kind="agent")
+    result = AgentLoop(runtime, task, max_steps=config.max_agent_steps).run()
     console.print("[bold cyan]MiniCode Agent[/bold cyan]")
+    console.print(f"run_id: {runtime.run_id}")
+    console.print(f"trace_backend: {runtime.trace_store.backend} ({runtime.trace_store.storage_path})")
     console.print(f"Workspace: {config.workspace}")
     console.print(f"Task: {task}")
-    console.print("[yellow]Agent loop is not implemented yet.[/yellow]")
+    console.print(f"Final phase: {result.state.current_phase.value}")
+    console.print(f"Selected skills: {', '.join(result.state.selected_skills) or '(none)'}")
+    console.print(f"Tool calls: {result.state.metrics.tool_calls}")
 
 
 @app.command()

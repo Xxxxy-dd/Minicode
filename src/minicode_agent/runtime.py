@@ -16,11 +16,11 @@ class RuntimeContext(BaseModel):
     trace_store: TraceStore
 
     @classmethod
-    def create(cls, workspace: Path, run_id: str | None = None) -> "RuntimeContext":
+    def create(cls, workspace: Path, run_id: str | None = None, run_kind: str = "tool") -> "RuntimeContext":
         resolved_workspace = workspace.expanduser().resolve()
         return cls(
             workspace=resolved_workspace,
-            run_id=run_id or f"tool_{uuid4().hex[:8]}",
+            run_id=run_id or f"{run_kind}_{uuid4().hex[:8]}",
             trace_store=TraceStore(default_trace_db_path(resolved_workspace)),
         )
 

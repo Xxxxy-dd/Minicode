@@ -40,9 +40,10 @@ def test_permission_policy_blocks_blocked_tools() -> None:
     assert decision.mode == PermissionMode.DENY
 
 
-def test_cli_run_placeholder() -> None:
+def test_cli_run_executes_loop() -> None:
     runner = CliRunner()
     result = runner.invoke(app, ["run", "fix tests"])
 
     assert result.exit_code == 0
-    assert "Agent loop is not implemented yet" in result.output
+    assert "run_id: agent_" in result.output
+    assert "Final phase: done" in result.output

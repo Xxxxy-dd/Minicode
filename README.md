@@ -6,7 +6,7 @@ The first milestone focuses on a clean Python project skeleton and stable module
 
 ## Current Status
 
-Day 5 trace store is available:
+Day 6 optimized agent loop is available:
 
 - CLI entrypoint
 - configuration model
@@ -22,10 +22,12 @@ Day 5 trace store is available:
 - trace store for tool request, permission, and result events
 - SQLite trace persistence with JSONL fallback
 - compact trace payloads, secret redaction, duration metrics, and JSON trace output
+- rule-driven agent loop with phase trace events
+- planner abstraction, run_started trace, runtime context, and max-step support
 - approval-required handling for medium/high-risk tools
 - deny handling for blocked tools
 - package layout
-- smoke tests, read-only tool tests, permission tests, write tool tests, shell tool tests, and trace tests
+- smoke tests, read-only tool tests, permission tests, write tool tests, shell tool tests, trace tests, and agent loop tests
 
 ## Planned CLI
 

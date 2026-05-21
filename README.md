@@ -6,7 +6,7 @@ The first milestone focuses on a clean Python project skeleton and stable module
 
 ## Current Status
 
-Day 2 permission gateway is available:
+Day 4 controlled shell and test tools are available:
 
 - CLI entrypoint
 - configuration model
@@ -14,12 +14,15 @@ Day 2 permission gateway is available:
 - tool interface models
 - tool registry
 - read-only tools: `list_files`, `read_file`, `search_code`, `git_status`, `git_diff`
+- write tools: `write_file`, `edit_file`
+- command tools: `run_shell`, `run_tests`
 - permission gateway
 - path sandbox for workspace-bound tool arguments
+- command safety classifier for dangerous shell patterns
 - approval-required handling for medium/high-risk tools
 - deny handling for blocked tools
 - package layout
-- smoke tests, read-only tool tests, and permission tests
+- smoke tests, read-only tool tests, permission tests, write tool tests, and shell tool tests
 
 ## Planned CLI
 
@@ -27,6 +30,12 @@ Day 2 permission gateway is available:
 minicode run "fix the failing tests"
 minicode tools list
 minicode tools run read_file --path README.md
+minicode tools run write_file --path notes.txt --content "hello" --approved
+minicode tools run write_file --path nested/notes.txt --content "hello" --create-parents --approved
+minicode tools run edit_file --path notes.txt --old-text "hello" --new-text "hi" --approved
+minicode tools run run_shell --command "cmd /c echo hello" --approved
+minicode tools run run_shell --arg cmd --arg /c --arg "echo hello" --approved
+minicode tools run run_tests --command "python -m pytest tests" --approved
 minicode eval examples/tasks
 minicode trace <run_id>
 ```

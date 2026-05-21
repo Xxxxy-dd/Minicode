@@ -79,21 +79,38 @@ def run_tool(
     ),
     path: str | None = typer.Option(None, "--path", help="Relative path argument for file tools."),
     pattern: str | None = typer.Option(None, "--pattern", help="Search pattern for search_code."),
+    command: str | None = typer.Option(None, "--command", help="Command for run_shell or run_tests."),
+    arg: list[str] | None = typer.Option(None, "--arg", help="Command argv item. Repeat for each argument."),
+    content: str | None = typer.Option(None, "--content", help="Content for write_file."),
+    old_text: str | None = typer.Option(None, "--old-text", help="Exact text to replace for edit_file."),
+    new_text: str | None = typer.Option(None, "--new-text", help="Replacement text for edit_file."),
     max_files: int = typer.Option(200, "--max-files", help="Maximum files for list_files."),
     max_matches: int = typer.Option(100, "--max-matches", help="Maximum matches for search_code."),
+    timeout_seconds: int | None = typer.Option(None, "--timeout-seconds", help="Command timeout in seconds."),
+    replace_all: bool = typer.Option(False, "--replace-all", help="Replace all occurrences for edit_file."),
+    create_parents: bool = typer.Option(False, "--create-parents", help="Create missing parent directories for write_file."),
     stat: bool = typer.Option(False, "--stat", help="Show git diff stat."),
+    approved: bool = typer.Option(False, "--approved", help="Approve tools that require confirmation."),
 ) -> None:
-    """Run a registered read-only tool."""
+    """Run a registered tool."""
     registry = create_default_registry()
     executor = ToolExecutor(registry)
     arguments = {
         "path": path,
         "pattern": pattern,
+        "command": command,
+        "argv": arg,
+        "content": content,
+        "old_text": old_text,
+        "new_text": new_text,
         "max_files": max_files,
         "max_matches": max_matches,
+        "timeout_seconds": timeout_seconds,
+        "replace_all": replace_all,
+        "create_parents": create_parents,
         "stat": stat,
     }
-    observation = executor.execute(name, ToolContext(workspace=workspace), arguments)
+    observation = executor.execute(name, ToolContext(workspace=workspace), arguments, approved=approved)
     if observation.ok:
         if observation.output:
             console.print(observation.output)

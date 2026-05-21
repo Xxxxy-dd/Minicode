@@ -6,7 +6,7 @@ The first milestone focuses on a clean Python project skeleton and stable module
 
 ## Current Status
 
-Day 7 model adapter layer is available:
+Day 8 query loop v2 is available:
 
 - CLI entrypoint
 - configuration model
@@ -31,9 +31,13 @@ Day 7 model adapter layer is available:
 - stable planning prompt builder
 - structured model response parser
 - optional model-driven planner for `minicode run`
+- model-driven multi-step query loop
+- real tool outputs injected into later model turns
+- model stop policy with final answers
+- configurable retry limit for failed tool calls
 - mock model tests for model planning
 - package layout
-- smoke tests, read-only tool tests, permission tests, write tool tests, shell tool tests, trace tests, agent loop tests, and model planning tests
+- smoke tests, read-only tool tests, permission tests, write tool tests, shell tool tests, trace tests, agent loop tests, model planning tests, and OpenAI-compatible adapter tests
 
 ## Planned CLI
 
@@ -64,6 +68,11 @@ MINICODE_MODEL_BASE_URL=https://api.openai.com/v1
 ```
 
 `OPENAI_MODEL` and `OPENAI_API_KEY` are also accepted as compatibility fallbacks.
+
+Model-backed runs use the multi-step query loop. Rule-planner runs remain a
+single safe action for deterministic local demos. `max_agent_steps` bounds model
+turns and tool calls; `max_failed_tool_attempts` bounds repeated failed tool
+calls before the run fails.
 
 ## Design Spec
 

@@ -56,7 +56,13 @@ def run(
             api_key=config.model_api_key,
             base_url=config.model_base_url,
         )
-    result = AgentLoop(runtime, task, max_steps=config.max_agent_steps, model_client=model_client).run()
+    result = AgentLoop(
+        runtime,
+        task,
+        max_steps=config.max_agent_steps,
+        max_failed_tool_attempts=config.max_failed_tool_attempts,
+        model_client=model_client,
+    ).run()
     console.print("[bold cyan]MiniCode Agent[/bold cyan]")
     console.print(f"run_id: {runtime.run_id}")
     console.print(f"trace_backend: {runtime.trace_store.backend} ({runtime.trace_store.storage_path})")

@@ -14,6 +14,18 @@ class PlannedAction:
     description: str
 
 
+@dataclass(frozen=True)
+class ModelDecision:
+    summary: str
+    next_actions: list[str]
+    action: PlannedAction | None
+    selected_skill: str | None = None
+    stop: bool = False
+    final_answer: str | None = None
+    input_tokens: int = 0
+    output_tokens: int = 0
+
+
 class RuleBasedPlanner:
     """Small deterministic planner used before model-driven planning exists."""
 
@@ -62,54 +74,72 @@ class ModelDrivenPlanner:
         self.registry = registry
         self.trace_store = trace_store
         self.run_id = run_id
-        self.selected_skill: str | None = None
-        self.next_actions: list[str] = []
-        self.summary: str = ""
-        self.last_response: ModelResponse | None = None
 
-    def plan(self, goal: str, known_files: list[str]) -> PlannedAction:
-        messages = build_planning_prompt(goal, known_files, self.registry)
+    def plan(
+        self,
+        goal: str,
+        known_files: list[str],
+        observations: list[dict[str, Any]] | None = None,
+        turn_index: int | None = None,
+        failed_tool_attempts: int = 0,
+    ) -> ModelDecision:
+        messages = build_planning_prompt(goal, known_files, self.registry, observations=observations)
         started_at = perf_counter()
         self._trace(
             "model_requested",
             {
                 "messages": len(messages),
                 "known_files": len(known_files),
+                "observation_count": len(observations or []),
+                "turn": turn_index,
+                "failed_tool_attempts": failed_tool_attempts,
             },
         )
         try:
             response = self.model_client.complete(messages)
-            self.last_response = response
             plan = parse_model_plan(response.content)
-            self.registry.get(plan.action.tool)
+            if plan.action:
+                self.registry.get(plan.action.tool)
         except Exception as exc:
             self._trace(
                 "model_failed",
                 {
                     "error": str(exc),
+                    "turn": turn_index,
                     "duration_ms": round((perf_counter() - started_at) * 1000, 3),
                 },
             )
             raise
 
-        self.selected_skill = plan.selected_skill
-        self.next_actions = plan.next_actions
-        self.summary = plan.summary
         self._trace(
             "model_finished",
             {
                 "ok": True,
-                "tool": plan.action.tool,
+                "tool": plan.action.tool if plan.action else None,
+                "stop": plan.stop,
+                "turn": turn_index,
                 "input_tokens": response.input_tokens,
                 "output_tokens": response.output_tokens,
                 "metadata": response.metadata,
                 "duration_ms": round((perf_counter() - started_at) * 1000, 3),
             },
         )
-        return PlannedAction(
-            tool=plan.action.tool,
-            arguments=plan.action.arguments,
-            description=plan.summary,
+        action = None
+        if plan.action:
+            action = PlannedAction(
+                tool=plan.action.tool,
+                arguments=plan.action.arguments,
+                description=plan.summary,
+            )
+        return ModelDecision(
+            summary=plan.summary,
+            next_actions=plan.next_actions,
+            action=action,
+            selected_skill=plan.selected_skill,
+            stop=plan.stop,
+            final_answer=plan.final_answer,
+            input_tokens=response.input_tokens,
+            output_tokens=response.output_tokens,
         )
 
     def _trace(self, event_type: str, payload: dict[str, Any]) -> None:

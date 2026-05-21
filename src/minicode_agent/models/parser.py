@@ -13,8 +13,10 @@ class ModelAction:
 class ModelPlan:
     summary: str
     next_actions: list[str]
-    action: ModelAction
+    action: ModelAction | None
     selected_skill: str | None = None
+    stop: bool = False
+    final_answer: str | None = None
 
 
 def parse_model_plan(content: str) -> ModelPlan:
@@ -29,14 +31,17 @@ def parse_model_plan(content: str) -> ModelPlan:
 
     summary = _required_str(payload, "summary")
     next_actions = _string_list(payload.get("next_actions"), "next_actions")
-    action_payload = payload.get("action")
-    if not isinstance(action_payload, dict):
-        raise ValueError("Model response field 'action' must be an object.")
+    stop = payload.get("stop", False)
+    if not isinstance(stop, bool):
+        raise ValueError("Model response field 'stop' must be a boolean.")
 
-    tool = _required_str(action_payload, "tool")
-    arguments = action_payload.get("arguments", {})
-    if not isinstance(arguments, dict):
-        raise ValueError("Model response field 'action.arguments' must be an object.")
+    final_answer = payload.get("final_answer")
+    if final_answer is not None and not isinstance(final_answer, str):
+        raise ValueError("Model response field 'final_answer' must be a string or null.")
+    if stop and (not isinstance(final_answer, str) or not final_answer.strip()):
+        raise ValueError("Model response field 'final_answer' must be a non-empty string when stop is true.")
+
+    action = _parse_action(payload.get("action"), stop)
 
     selected_skill = payload.get("selected_skill")
     if selected_skill is not None and not isinstance(selected_skill, str):
@@ -45,8 +50,10 @@ def parse_model_plan(content: str) -> ModelPlan:
     return ModelPlan(
         summary=summary,
         next_actions=next_actions,
-        action=ModelAction(tool=tool, arguments=arguments),
+        action=action,
         selected_skill=selected_skill,
+        stop=stop,
+        final_answer=final_answer,
     )
 
 
@@ -63,3 +70,18 @@ def _string_list(value: Any, key: str) -> list[str]:
     if not all(isinstance(item, str) and item.strip() for item in value):
         raise ValueError(f"Model response field '{key}' must contain only non-empty strings.")
     return value
+
+
+def _parse_action(value: Any, stop: bool) -> ModelAction | None:
+    if value is None:
+        if stop:
+            return None
+        raise ValueError("Model response field 'action' must be an object when stop is false.")
+    if not isinstance(value, dict):
+        raise ValueError("Model response field 'action' must be an object or null.")
+
+    tool = _required_str(value, "tool")
+    arguments = value.get("arguments", {})
+    if not isinstance(arguments, dict):
+        raise ValueError("Model response field 'action.arguments' must be an object.")
+    return ModelAction(tool=tool, arguments=arguments)

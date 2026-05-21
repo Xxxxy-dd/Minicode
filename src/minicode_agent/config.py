@@ -13,6 +13,7 @@ class MiniCodeConfig(BaseModel):
     trace_db_path: Path | None = None
     max_agent_steps: int = 30
     max_subagent_steps: int = 8
+    max_failed_tool_attempts: int = 2
     require_approval_for_writes: bool = True
     model_name: str | None = None
     model_base_url: str = "https://api.openai.com/v1"

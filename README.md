@@ -6,7 +6,7 @@ The first milestone focuses on a clean Python project skeleton and stable module
 
 ## Current Status
 
-Day 4 controlled shell and test tools are available:
+Day 5 trace store is available:
 
 - CLI entrypoint
 - configuration model
@@ -19,10 +19,13 @@ Day 4 controlled shell and test tools are available:
 - permission gateway
 - path sandbox for workspace-bound tool arguments
 - command safety classifier for dangerous shell patterns
+- trace store for tool request, permission, and result events
+- SQLite trace persistence with JSONL fallback
+- compact trace payloads, secret redaction, duration metrics, and JSON trace output
 - approval-required handling for medium/high-risk tools
 - deny handling for blocked tools
 - package layout
-- smoke tests, read-only tool tests, permission tests, write tool tests, and shell tool tests
+- smoke tests, read-only tool tests, permission tests, write tool tests, shell tool tests, and trace tests
 
 ## Planned CLI
 
@@ -36,8 +39,9 @@ minicode tools run edit_file --path notes.txt --old-text "hello" --new-text "hi"
 minicode tools run run_shell --command "cmd /c echo hello" --approved
 minicode tools run run_shell --arg cmd --arg /c --arg "echo hello" --approved
 minicode tools run run_tests --command "python -m pytest tests" --approved
+minicode trace
+minicode trace <run_id> --json
 minicode eval examples/tasks
-minicode trace <run_id>
 ```
 
 ## Design Spec

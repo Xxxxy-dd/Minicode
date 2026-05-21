@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import typer
@@ -5,6 +6,8 @@ from rich.console import Console
 from rich.table import Table
 
 from minicode_agent.config import MiniCodeConfig
+from minicode_agent.trace import TraceStore, default_trace_db_path
+from minicode_agent.runtime import RuntimeContext
 from minicode_agent.tools.executor import ToolExecutor
 from minicode_agent.tools.registry import create_default_registry
 from minicode_agent.tools.types import ToolContext
@@ -44,9 +47,47 @@ def eval(taskset: Path = typer.Argument(..., help="Path to a benchmark task set.
 
 
 @app.command()
-def trace(run_id: str = typer.Argument(..., help="Run id to inspect.")) -> None:
+def trace(
+    run_id: str | None = typer.Argument(None, help="Run id to inspect. Omit to show recent events."),
+    workspace: Path = typer.Option(
+        Path.cwd(),
+        "--workspace",
+        "-w",
+        help="Workspace directory that contains the trace db.",
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Print full trace events as JSON."),
+) -> None:
     """Inspect a recorded execution trace."""
-    console.print(f"[yellow]Trace inspection is not implemented yet:[/yellow] {run_id}")
+    store = TraceStore(default_trace_db_path(workspace))
+    events = store.list_events(run_id)
+    if json_output:
+        console.print(
+            json.dumps([event.model_dump() for event in events], ensure_ascii=False, indent=2),
+            markup=False,
+        )
+        return
+
+    table = Table(title="MiniCode Trace")
+    table.add_column("Time")
+    table.add_column("Run")
+    table.add_column("Event")
+    table.add_column("Tool")
+    table.add_column("OK")
+    table.add_column("Reason")
+    for event in events[-50:]:
+        tool = event.payload.get("tool") or event.payload.get("metadata", {}).get("tool", "")
+        ok = str(event.payload.get("ok", ""))
+        reason = event.payload.get("reason") or event.payload.get("error") or event.payload.get("metadata", {}).get("permission_reason", "")
+        table.add_row(
+            event.timestamp,
+            event.run_id,
+            event.event_type,
+            str(tool),
+            ok,
+            str(reason),
+        )
+    console.print(f"[dim]trace_backend: {store.backend} ({store.storage_path})[/dim]")
+    console.print(table)
 
 
 @tools_app.command("list")
@@ -94,8 +135,9 @@ def run_tool(
 ) -> None:
     """Run a registered tool."""
     registry = create_default_registry()
-    executor = ToolExecutor(registry)
-    arguments = {
+    runtime = RuntimeContext.create(workspace)
+    executor = ToolExecutor(registry, trace_store=runtime.trace_store, run_id=runtime.run_id)
+    arguments = compact_arguments({
         "path": path,
         "pattern": pattern,
         "command": command,
@@ -103,17 +145,19 @@ def run_tool(
         "content": content,
         "old_text": old_text,
         "new_text": new_text,
-        "max_files": max_files,
-        "max_matches": max_matches,
+        "max_files": max_files if max_files != 200 else None,
+        "max_matches": max_matches if max_matches != 100 else None,
         "timeout_seconds": timeout_seconds,
-        "replace_all": replace_all,
-        "create_parents": create_parents,
-        "stat": stat,
-    }
+        "replace_all": replace_all if replace_all else None,
+        "create_parents": create_parents if create_parents else None,
+        "stat": stat if stat else None,
+    })
     observation = executor.execute(name, ToolContext(workspace=workspace), arguments, approved=approved)
     if observation.ok:
+        console.print(f"[dim]run_id: {runtime.run_id}[/dim]")
+        console.print(f"[dim]trace_backend: {runtime.trace_store.backend} ({runtime.trace_store.storage_path})[/dim]")
         if observation.output:
-            console.print(observation.output)
+            console.print(safe_console_text(observation.output), markup=False)
         else:
             console.print("[dim](empty output)[/dim]")
         return
@@ -123,3 +167,11 @@ def run_tool(
 
 def main() -> None:
     app()
+
+
+def safe_console_text(text: str) -> str:
+    return text.lstrip("\ufeff")
+
+
+def compact_arguments(arguments: dict) -> dict:
+    return {key: value for key, value in arguments.items() if value is not None}

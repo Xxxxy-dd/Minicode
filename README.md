@@ -6,7 +6,7 @@ The first milestone focuses on a clean Python project skeleton and stable module
 
 ## Current Status
 
-Day 10 skill routing is available:
+Day 11 local deterministic memory v1 is available:
 
 - CLI entrypoint
 - configuration model
@@ -42,6 +42,13 @@ Day 10 skill routing is available:
 - active skill content injected into model planning prompts
 - deterministic metadata-based skill router
 - top-k skill injection with traceable route reasons
+- memory records with project, user, procedure, and failure kinds
+- local memory persistence with SQLite and JSONL fallback
+- memory admission rules for confidence, source run ids, duplicate detection, admission reasons, and secret rejection
+- `minicode memory add` and `minicode memory list`
+- `minicode memory delete` for correcting stale or mistaken records
+- relevant memory injected into model planning prompts
+- deterministic run-end reflection candidates written to memory
 - Chinese and English skill aliases
 - mock model tests for model planning
 - package layout
@@ -56,6 +63,10 @@ minicode run "inspect project" --no-model
 minicode skills list
 minicode skills show debugging
 minicode skills route "审查 diff"
+minicode memory add "Use python -m pytest tests for validation" --kind project_memory --confidence 0.9
+minicode memory list
+minicode memory list --query pytest
+minicode memory delete <memory_id>
 minicode tools list
 minicode tools run read_file --path README.md
 minicode tools run write_file --path notes.txt --content "hello" --approved
@@ -85,8 +96,10 @@ single safe action for deterministic local demos. `max_agent_steps` bounds model
 turns and tool calls; `max_failed_tool_attempts` bounds repeated failed tool
 calls before the run fails. Skill routing uses deterministic metadata and
 keyword recall with English and Chinese aliases. Route candidates and reasons
-are stored on `AgentState` and in trace events. Optional LLM reranking is
-intentionally left for a later polishing pass.
+are stored on `AgentState` and in trace events. Memory v1 uses deterministic
+local reflection and admission rules first; LLM-based summary and filtering is
+reserved for a later enhancement. Optional LLM reranking is intentionally left
+for a later polishing pass.
 
 ## Design Spec
 

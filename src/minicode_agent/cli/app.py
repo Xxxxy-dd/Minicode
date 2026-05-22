@@ -7,6 +7,7 @@ from rich.table import Table
 
 from minicode_agent.agent import AgentLoop
 from minicode_agent.config import MiniCodeConfig
+from minicode_agent.memory import MemoryKind, MemoryStore, default_memory_db_path
 from minicode_agent.models import OpenAICompatibleClient
 from minicode_agent.skills import SkillError, SkillRegistry, SkillRouter
 from minicode_agent.trace import TraceStore, default_trace_db_path
@@ -23,8 +24,10 @@ app = typer.Typer(
 console = Console()
 tools_app = typer.Typer(help="Inspect and run MiniCode tools.")
 skills_app = typer.Typer(help="Inspect MiniCode skills.")
+memory_app = typer.Typer(help="Inspect and update MiniCode memory.")
 app.add_typer(tools_app, name="tools")
 app.add_typer(skills_app, name="skills")
+app.add_typer(memory_app, name="memory")
 
 
 @app.command()
@@ -200,6 +203,96 @@ def route_skill(task: str = typer.Argument(..., help="Task text to route.")) -> 
         console.print("[dim]No matching skills.[/dim]")
         return
     console.print(table)
+
+
+@memory_app.command("list")
+def list_memory(
+    workspace: Path = typer.Option(
+        Path.cwd(),
+        "--workspace",
+        "-w",
+        help="Workspace directory that contains the memory db.",
+    ),
+    kind: MemoryKind | None = typer.Option(None, "--kind", help="Memory kind to show."),
+    limit: int = typer.Option(50, "--limit", help="Maximum records to show."),
+    query: str | None = typer.Option(None, "--query", help="Search memory content and tags."),
+    json_output: bool = typer.Option(False, "--json", help="Print records as JSON."),
+) -> None:
+    """List project memories."""
+    store = MemoryStore(default_memory_db_path(workspace))
+    records = store.search(query, limit=limit) if query else store.list(kind=kind, limit=limit)
+    if json_output:
+        console.print(json.dumps([record.model_dump() for record in records], ensure_ascii=False, indent=2), markup=False)
+        return
+
+    table = Table(title="MiniCode Memory")
+    table.add_column("Kind")
+    table.add_column("Confidence")
+    table.add_column("Source")
+    table.add_column("Reason")
+    table.add_column("Content")
+    for record in records:
+        table.add_row(
+            record.kind.value,
+            f"{record.confidence:.2f}",
+            record.source_run_id or "",
+            record.reason or "",
+            record.content,
+        )
+    console.print(f"[dim]memory_backend: {store.backend} ({store.db_path})[/dim]")
+    console.print(table)
+
+
+@memory_app.command("add")
+def add_memory(
+    content: str = typer.Argument(..., help="Memory content to store."),
+    workspace: Path = typer.Option(
+        Path.cwd(),
+        "--workspace",
+        "-w",
+        help="Workspace directory that contains the memory db.",
+    ),
+    kind: MemoryKind = typer.Option(MemoryKind.PROJECT, "--kind", help="Memory kind."),
+    confidence: float = typer.Option(0.8, "--confidence", help="Confidence from 0 to 1."),
+    source_run_id: str | None = typer.Option(None, "--source-run-id", help="Run id that produced this memory."),
+    tag: list[str] | None = typer.Option(None, "--tag", help="Tag for the memory. Repeat for multiple tags."),
+) -> None:
+    """Add a memory record if it is admissible and not a duplicate."""
+    store = MemoryStore(default_memory_db_path(workspace))
+    try:
+        record, inserted = store.add(
+            kind,
+            content,
+            confidence=confidence,
+            source_run_id=source_run_id,
+            tags=tag or [],
+        )
+    except ValueError as exc:
+        console.print(f"[red]Memory rejected:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+    console.print(f"[dim]memory_backend: {store.backend} ({store.db_path})[/dim]")
+    console.print("added" if inserted else "duplicate")
+    console.print(f"id: {record.id}")
+
+
+@memory_app.command("delete")
+def delete_memory(
+    memory_id: str = typer.Argument(..., help="Memory id to delete."),
+    workspace: Path = typer.Option(
+        Path.cwd(),
+        "--workspace",
+        "-w",
+        help="Workspace directory that contains the memory db.",
+    ),
+) -> None:
+    """Delete a memory record by id."""
+    store = MemoryStore(default_memory_db_path(workspace))
+    deleted = store.delete(memory_id)
+    if not deleted:
+        console.print(f"[red]Memory not found:[/red] {memory_id}")
+        raise typer.Exit(code=1)
+    console.print(f"[dim]memory_backend: {store.backend} ({store.db_path})[/dim]")
+    console.print(f"deleted: {memory_id}")
 
 
 @tools_app.command("run")

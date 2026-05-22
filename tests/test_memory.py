@@ -1,0 +1,196 @@
+from typer.testing import CliRunner
+
+from minicode_agent.agent import AgentLoop
+from minicode_agent.cli.app import app
+from minicode_agent.memory import DeterministicReflectionEngine, MemoryKind, MemoryStore
+from minicode_agent.memory.reflection import MemoryCandidate
+from minicode_agent.models import build_planning_prompt
+from minicode_agent.runtime import RuntimeContext
+from minicode_agent.tools.registry import create_default_registry
+
+
+def test_memory_store_adds_and_lists_records(tmp_path) -> None:
+    store = MemoryStore(tmp_path / "memory.db")
+
+    record, inserted = store.add(
+        MemoryKind.PROJECT,
+        "Use python -m pytest tests for this project.",
+        confidence=0.9,
+        source_run_id="run_1",
+        tags=["tests"],
+        reason="manual project fact",
+    )
+
+    assert inserted
+    assert record.kind == MemoryKind.PROJECT
+    assert record.confidence == 0.9
+    records = store.list()
+    assert records[0].content == "Use python -m pytest tests for this project."
+    assert records[0].tags == ["tests"]
+    assert records[0].reason == "manual project fact"
+
+
+def test_memory_store_detects_duplicates(tmp_path) -> None:
+    store = MemoryStore(tmp_path / "memory.db")
+
+    first, first_inserted = store.add(MemoryKind.PROCEDURE, "Run pytest before finishing.")
+    second, second_inserted = store.add(MemoryKind.PROCEDURE, " run  PYTEST before finishing. ")
+
+    assert first_inserted
+    assert not second_inserted
+    assert second.id == first.id
+    assert len(store.list()) == 1
+
+
+def test_memory_store_rejects_secret_content(tmp_path) -> None:
+    store = MemoryStore(tmp_path / "memory.db")
+
+    try:
+        store.add(MemoryKind.USER, "api_key=abc123 should not be saved")
+    except ValueError as exc:
+        assert "secret" in str(exc)
+    else:
+        raise AssertionError("secret memory should be rejected")
+
+
+def test_memory_search_returns_relevant_records(tmp_path) -> None:
+    store = MemoryStore(tmp_path / "memory.db")
+    store.add(MemoryKind.PROJECT, "Use pytest for validation.", confidence=0.5, tags=["tests"])
+    store.add(MemoryKind.PROCEDURE, "Run test suite before finishing.", confidence=0.9, tags=["tests"])
+    store.add(MemoryKind.USER, "Answer in Chinese.", tags=["style"])
+
+    records = store.search("please run tests")
+
+    assert [record.kind for record in records] == [MemoryKind.PROCEDURE, MemoryKind.PROJECT]
+
+
+def test_memory_store_deletes_records(tmp_path) -> None:
+    store = MemoryStore(tmp_path / "memory.db")
+    record, _ = store.add(MemoryKind.USER, "Answer in Chinese.")
+
+    assert store.delete(record.id)
+    assert not store.delete(record.id)
+    assert store.list() == []
+
+
+def test_memory_store_jsonl_fallback(tmp_path, monkeypatch) -> None:
+    def fail_init(self) -> None:
+        raise ImportError("sqlite unavailable")
+
+    monkeypatch.setattr(MemoryStore, "_init_db", fail_init)
+    store = MemoryStore(tmp_path / "memory.db")
+
+    record, inserted = store.add(MemoryKind.PROJECT, "Use pytest for validation.")
+
+    assert store.backend == "jsonl"
+    assert inserted
+    assert store.list()[0].id == record.id
+    assert store.delete(record.id)
+
+
+def test_build_planning_prompt_includes_relevant_memory(tmp_path) -> None:
+    store = MemoryStore(tmp_path / "memory.db")
+    memory, _ = store.add(
+        MemoryKind.PROJECT,
+        "Use python -m pytest tests for this project.",
+        confidence=0.9,
+        source_run_id="run_1",
+        tags=["tests"],
+    )
+
+    messages = build_planning_prompt(
+        "run tests",
+        ["README.md"],
+        create_default_registry(),
+        memories=[memory],
+    )
+
+    assert '"relevant_memory"' in messages[1].content
+    assert "Use python -m pytest tests for this project." in messages[1].content
+    assert '"confidence": 0.9' in messages[1].content
+
+
+def test_build_planning_prompt_limits_memory_budget(tmp_path) -> None:
+    store = MemoryStore(tmp_path / "memory.db")
+    memories = [
+        store.add(MemoryKind.PROJECT, f"Memory {index} " + ("x" * 300))[0]
+        for index in range(20)
+    ]
+
+    messages = build_planning_prompt("inspect", ["README.md"], create_default_registry(), memories=memories)
+
+    assert "Memory 0" in messages[1].content
+    assert "Memory 8" not in messages[1].content
+
+
+def test_cli_memory_add_and_list(tmp_path) -> None:
+    runner = CliRunner()
+
+    add_result = runner.invoke(
+        app,
+        [
+            "memory",
+            "add",
+            "Answer in Chinese.",
+            "--workspace",
+            str(tmp_path),
+            "--kind",
+            "user_memory",
+            "--confidence",
+            "0.8",
+            "--tag",
+            "style",
+        ],
+    )
+    list_result = runner.invoke(app, ["memory", "list", "--workspace", str(tmp_path)])
+
+    assert add_result.exit_code == 0, add_result.output
+    assert "added" in add_result.output
+    assert list_result.exit_code == 0, list_result.output
+    assert "user_memory" in list_result.output
+    assert "Answer in Chinese." in list_result.output
+
+
+def test_cli_memory_delete(tmp_path) -> None:
+    runner = CliRunner()
+    add_result = runner.invoke(app, ["memory", "add", "Answer in Chinese.", "--workspace", str(tmp_path)])
+    memory_id = next(line.split(": ", 1)[1] for line in add_result.output.splitlines() if line.startswith("id: "))
+
+    delete_result = runner.invoke(app, ["memory", "delete", memory_id, "--workspace", str(tmp_path)])
+    list_result = runner.invoke(app, ["memory", "list", "--workspace", str(tmp_path)])
+
+    assert delete_result.exit_code == 0, delete_result.output
+    assert "deleted" in delete_result.output
+    assert "Answer in Chinese." not in list_result.output
+
+
+def test_reflection_admission_rejects_low_confidence() -> None:
+    engine = DeterministicReflectionEngine()
+    candidate = MemoryCandidate(
+        kind=MemoryKind.PROJECT,
+        content="Maybe useful later.",
+        confidence=0.2,
+        source_run_id="run_1",
+        tags=["reflection"],
+        reason="low confidence test",
+        metadata={"rule": "test"},
+    )
+
+    record, reason = engine.admit(candidate)
+
+    assert record is None
+    assert "confidence" in reason
+
+
+def test_agent_loop_writes_reflection_memory(tmp_path) -> None:
+    (tmp_path / "README.md").write_text("# Demo\n", encoding="utf-8")
+    runtime = RuntimeContext.create(tmp_path, run_id="agent_memory_test")
+
+    result = AgentLoop(runtime, "inspect project").run()
+
+    records = runtime.memory_store.list()
+    assert result.state.current_phase.value == "done"
+    assert records
+    assert any(record.source_run_id == "agent_memory_test" for record in records)
+    events = runtime.trace_store.list_events("agent_memory_test")
+    assert "memory_written" in [event.event_type for event in events]

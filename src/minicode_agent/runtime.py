@@ -3,6 +3,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from minicode_agent.memory import MemoryStore, default_memory_db_path
 from minicode_agent.trace import TraceStore, default_trace_db_path
 
 
@@ -14,6 +15,7 @@ class RuntimeContext(BaseModel):
     workspace: Path
     run_id: str = Field(default_factory=lambda: f"tool_{uuid4().hex[:8]}")
     trace_store: TraceStore
+    memory_store: MemoryStore
 
     @classmethod
     def create(cls, workspace: Path, run_id: str | None = None, run_kind: str = "tool") -> "RuntimeContext":
@@ -22,6 +24,7 @@ class RuntimeContext(BaseModel):
             workspace=resolved_workspace,
             run_id=run_id or f"{run_kind}_{uuid4().hex[:8]}",
             trace_store=TraceStore(default_trace_db_path(resolved_workspace)),
+            memory_store=MemoryStore(default_memory_db_path(resolved_workspace)),
         )
 
     @field_validator("workspace")

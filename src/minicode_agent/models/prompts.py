@@ -2,11 +2,15 @@ import json
 
 from typing import Any
 
+from minicode_agent.memory import MemoryRecord
 from minicode_agent.models.client import ModelMessage
 from minicode_agent.skills import SkillDefinition
 from minicode_agent.tools.registry import ToolRegistry
 
 MAX_SKILL_CONTENT_CHARS = 1200
+MAX_MEMORY_CONTENT_CHARS = 500
+MAX_MEMORY_PROMPT_CHARS = 2000
+MAX_MEMORY_PROMPT_RECORDS = 8
 
 
 def build_planning_prompt(
@@ -15,6 +19,7 @@ def build_planning_prompt(
     registry: ToolRegistry,
     observations: list[dict[str, Any]] | None = None,
     skills: list[SkillDefinition] | None = None,
+    memories: list[MemoryRecord] | None = None,
 ) -> list[ModelMessage]:
     tools = [
         {
@@ -37,6 +42,7 @@ def build_planning_prompt(
         "known_files": known_files[:50],
         "recent_observations": (observations or [])[-10:],
         "active_skills": [skill_prompt_payload(skill) for skill in (skills or [])],
+        "relevant_memory": memory_prompt_payloads(memories or []),
         "available_tools": tools,
         "response_example": {
             "summary": "Inspect project documentation first.",
@@ -76,3 +82,33 @@ def truncate_skill_content(content: str) -> str:
     if len(content) <= MAX_SKILL_CONTENT_CHARS:
         return content
     return content[:MAX_SKILL_CONTENT_CHARS] + "\n[truncated]"
+
+
+def memory_prompt_payload(memory: MemoryRecord) -> dict[str, Any]:
+    return {
+        "kind": memory.kind.value,
+        "content": truncate_memory_content(memory.content),
+        "confidence": memory.confidence,
+        "source_run_id": memory.source_run_id,
+        "tags": memory.tags,
+        "reason": memory.reason,
+    }
+
+
+def memory_prompt_payloads(memories: list[MemoryRecord]) -> list[dict[str, Any]]:
+    payloads: list[dict[str, Any]] = []
+    used_chars = 0
+    for memory in memories[:MAX_MEMORY_PROMPT_RECORDS]:
+        payload = memory_prompt_payload(memory)
+        content_chars = len(str(payload["content"]))
+        if used_chars + content_chars > MAX_MEMORY_PROMPT_CHARS:
+            break
+        used_chars += content_chars
+        payloads.append(payload)
+    return payloads
+
+
+def truncate_memory_content(content: str) -> str:
+    if len(content) <= MAX_MEMORY_CONTENT_CHARS:
+        return content
+    return content[:MAX_MEMORY_CONTENT_CHARS] + "\n[truncated]"

@@ -3,6 +3,7 @@ from typing import Any
 
 from minicode_agent.core.state import AgentPhase, AgentState, RunMetrics, TaskState
 from minicode_agent.agent.planner import ModelDecision, ModelDrivenPlanner, PlannedAction, RuleBasedPlanner
+from minicode_agent.memory import DeterministicReflectionEngine, MemoryRecord
 from minicode_agent.models import ModelClient
 from minicode_agent.runtime import RuntimeContext
 from minicode_agent.skills import SkillDefinition, SkillError, SkillRegistry, SkillRouter
@@ -62,6 +63,8 @@ class AgentLoop:
         self.skill_registry = SkillRegistry()
         self.skill_router = SkillRouter(self.skill_registry)
         self.active_skills: list[SkillDefinition] = []
+        self.reflection_engine = DeterministicReflectionEngine()
+        self.active_memories: list[MemoryRecord] = []
 
     def run(self) -> AgentRunResult:
         self.runtime.trace_store.append(
@@ -77,7 +80,15 @@ class AgentLoop:
 
         self._phase(AgentPhase.LOAD_CONTEXT, "Load workspace rules and trace context.")
         known_files = self._load_context()
-        self._observe("context_loaded", {"workspace": self.state.workspace, "known_files": known_files[:20]})
+        self.active_memories = self.runtime.memory_store.search(self.state.user_goal)
+        self._observe(
+            "context_loaded",
+            {
+                "workspace": self.state.workspace,
+                "known_files": known_files[:20],
+                "memory_count": len(self.active_memories),
+            },
+        )
 
         self._phase(AgentPhase.SELECT_SKILL, "Select a skill for the task.")
         route_result = self.skill_router.route(self.state.user_goal)
@@ -277,6 +288,44 @@ class AgentLoop:
 
     def _reflect(self) -> None:
         self.state.task_state.decisions.append("Keep the first loop minimal and traceable.")
+        candidates = self.reflection_engine.generate(self.state, self.transcript)
+        written = 0
+        skipped = 0
+        for candidate in candidates:
+            record, admission_reason = self.reflection_engine.admit(candidate)
+            if record is None:
+                skipped += 1
+                self._observe("memory_rejected", {"kind": candidate.kind.value, "reason": admission_reason})
+                continue
+            try:
+                _, inserted = self.runtime.memory_store.add(
+                    record.kind,
+                    record.content,
+                    confidence=record.confidence,
+                    source_run_id=record.source_run_id,
+                    tags=record.tags,
+                    reason=record.reason,
+                    metadata=record.metadata,
+                )
+            except ValueError as exc:
+                skipped += 1
+                self._observe("memory_rejected", {"kind": record.kind.value, "reason": str(exc)})
+                continue
+            if inserted:
+                written += 1
+                self.runtime.trace_store.append(
+                    self.runtime.run_id,
+                    "memory_written",
+                    {
+                        "kind": record.kind.value,
+                        "confidence": record.confidence,
+                        "reason": record.reason,
+                        "tags": record.tags,
+                    },
+                )
+            else:
+                skipped += 1
+        self._observe("memory_reflected", {"candidates": len(candidates), "written": written, "skipped": skipped})
 
     def _plan_action(self, known_files: list[str]) -> PlannedAction | None:
         self.state.task_state.next_actions = self.rule_planner.plan_steps(self.state.user_goal)
@@ -294,6 +343,7 @@ class AgentLoop:
                 known_files,
                 observations=self.observations,
                 skills=self.active_skills,
+                memories=self.active_memories,
                 turn_index=turn_index,
                 failed_tool_attempts=failed_tool_attempts,
             )

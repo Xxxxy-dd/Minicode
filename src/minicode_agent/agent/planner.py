@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from time import perf_counter
 from typing import Any
 
+from minicode_agent.memory import MemoryRecord
 from minicode_agent.models import ModelClient, ModelResponse, build_planning_prompt, parse_model_plan
 from minicode_agent.skills import SkillDefinition
 from minicode_agent.trace.store import TraceStore
@@ -82,10 +83,18 @@ class ModelDrivenPlanner:
         known_files: list[str],
         observations: list[dict[str, Any]] | None = None,
         skills: list[SkillDefinition] | None = None,
+        memories: list[MemoryRecord] | None = None,
         turn_index: int | None = None,
         failed_tool_attempts: int = 0,
     ) -> ModelDecision:
-        messages = build_planning_prompt(goal, known_files, self.registry, observations=observations, skills=skills)
+        messages = build_planning_prompt(
+            goal,
+            known_files,
+            self.registry,
+            observations=observations,
+            skills=skills,
+            memories=memories,
+        )
         started_at = perf_counter()
         self._trace(
             "model_requested",
@@ -94,6 +103,7 @@ class ModelDrivenPlanner:
                 "known_files": len(known_files),
                 "observation_count": len(observations or []),
                 "skill_count": len(skills or []),
+                "memory_count": len(memories or []),
                 "turn": turn_index,
                 "failed_tool_attempts": failed_tool_attempts,
             },

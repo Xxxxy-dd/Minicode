@@ -1,0 +1,16 @@
+﻿{
+  "id": "fix_boundary_condition",
+  "workspace": "../repos/mini_py",
+  "prompt": "Update summarize so truncated text is clearly marked when max_chars is smaller than the input length.",
+  "expected": "pass",
+  "category": "bugfix",
+  "tags": ["text", "boundary"],
+  "difficulty": "easy",
+  "success": [
+    {
+      "command": "{python} -m pytest tests/test_text_utils.py",
+      "exit_code": 0,
+      "timeout_seconds": 60
+    }
+  ]
+}

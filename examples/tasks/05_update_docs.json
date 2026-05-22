@@ -1,0 +1,16 @@
+﻿{
+  "id": "update_docs",
+  "workspace": "../repos/mini_py",
+  "prompt": "Update README.md to document calculator.py, paths.py, text_utils.py, and the test command.",
+  "expected": "pass",
+  "category": "docs",
+  "tags": ["readme"],
+  "difficulty": "easy",
+  "success": [
+    {
+      "command": "{python} -m pytest tests",
+      "exit_code": 0,
+      "timeout_seconds": 60
+    }
+  ]
+}

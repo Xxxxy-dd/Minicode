@@ -1,0 +1,57 @@
+from pathlib import Path
+
+from minicode_agent.harness import HarnessRunner
+from minicode_agent.harness.runner import render_report
+
+
+EXAMPLES_ROOT = Path("examples")
+TASKS_DIR = EXAMPLES_ROOT / "tasks"
+
+
+def test_benchmark_task_set_has_ten_tasks() -> None:
+    tasks = HarnessRunner(Path.cwd()).load_tasks(TASKS_DIR)
+
+    assert len(tasks) >= 10
+    assert len({task.id for task in tasks}) == len(tasks)
+
+
+def test_benchmark_tasks_have_enough_success_commands() -> None:
+    tasks = HarnessRunner(Path.cwd()).load_tasks(TASKS_DIR)
+    auto_judged = [task for task in tasks if task.success]
+
+    assert len(auto_judged) >= 5
+
+
+def test_benchmark_tasks_have_metadata() -> None:
+    tasks = HarnessRunner(Path.cwd()).load_tasks(TASKS_DIR)
+
+    assert all(task.category != "general" for task in tasks)
+    assert all(task.tags for task in tasks)
+    assert all(task.difficulty for task in tasks)
+    assert {task.expected.value for task in tasks} >= {"pass", "fail", "analysis_only"}
+
+
+def test_benchmark_task_workspaces_exist() -> None:
+    tasks = HarnessRunner(Path.cwd()).load_tasks(TASKS_DIR)
+
+    assert all(task.workspace.exists() for task in tasks)
+
+
+def test_benchmark_has_buggy_repo_task() -> None:
+    tasks = HarnessRunner(Path.cwd()).load_tasks(TASKS_DIR)
+    fix_task = next(task for task in tasks if task.id == "fix_pytest_failure")
+
+    assert fix_task.workspace.name == "mini_py_buggy"
+    assert fix_task.expected.value == "fail"
+
+
+def test_benchmark_report_displays_pass_rate() -> None:
+    tasks = HarnessRunner(Path.cwd()).load_tasks(TASKS_DIR)
+    results = [
+        HarnessRunner(Path.cwd()).run_task(tasks[0]),
+    ]
+
+    report = render_report(results)
+
+    assert "pass_rate" in report
+    assert tasks[0].id in report

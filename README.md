@@ -6,7 +6,7 @@ The first milestone focuses on a clean Python project skeleton and stable module
 
 ## Current Status
 
-Day 13 controlled subagent v1 is available:
+Day 15 benchmark task set v1 is available:
 
 - CLI entrypoint
 - configuration model
@@ -62,6 +62,16 @@ Day 13 controlled subagent v1 is available:
 - subagent results include allowed and denied tool sets for auditability
 - reviewer subagent reports changed files, risks, and test suggestions
 - `subagent_started` and `subagent_finished` trace events
+- JSON benchmark task loading from a file or directory
+- `minicode eval` runs AgentLoop, success commands, metrics collection, and report generation
+- eval metrics include pass/fail, runtime, tool calls, retries, compression events, subagent calls, and trace path
+- Markdown eval reports are written under `.minicode/evals/`
+- `examples/tasks/` contains 10 benchmark tasks
+- `examples/repos/mini_py/` and `examples/repos/mini_py_buggy/` provide sample Python projects
+- at least 5 benchmark tasks include automatic success commands
+- eval tasks run in isolated copied workspaces under `.minicode/eval_workspaces/`
+- eval supports config labels for Day 16 ablation reports
+- benchmark tasks include expected outcome, category, tags, and difficulty metadata
 - Chinese and English skill aliases
 - mock model tests for model planning
 - package layout
@@ -92,7 +102,7 @@ minicode tools run run_shell --arg cmd --arg /c --arg "echo hello" --approved
 minicode tools run run_tests --command "python -m pytest tests" --approved
 minicode trace
 minicode trace <run_id> --json
-minicode eval examples/tasks
+minicode eval examples/tasks --config baseline
 ```
 
 Model-backed runs use OpenAI-compatible chat completions. Prefer MiniCode-specific
@@ -119,8 +129,13 @@ turn, preserving goals, files, failures, and next actions. It triggers on long
 single tool outputs, recent observation bursts, or total history growth.
 Subagents are implemented with MiniCode's own tool runtime and permission
 gateway, not an external agent framework, so they reuse the same sandbox, trace,
-and approval boundaries as normal tools. Optional LLM reranking is intentionally
-left for a later polishing pass.
+and approval boundaries as normal tools. Harness v1 provides the lightweight
+evaluation runner used by Day 15 benchmark tasks and Day 16 ablation experiments.
+Benchmark v1 adds a 10-task local task set covering pytest repair, small feature
+work, boundary fixes, refactoring, docs, type hints, path handling, tests, review,
+and safety checks. Eval tasks are copied into isolated workspaces before running,
+and reports are grouped by config labels for Day 16 ablation experiments. Optional
+LLM reranking is intentionally left for a later polishing pass.
 
 ## Design Spec
 

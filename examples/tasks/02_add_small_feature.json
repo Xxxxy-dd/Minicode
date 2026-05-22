@@ -1,0 +1,16 @@
+﻿{
+  "id": "add_small_feature",
+  "workspace": "../repos/mini_py",
+  "prompt": "Add a subtract(a, b) helper to calculator.py and cover it with tests.",
+  "expected": "pass",
+  "category": "feature",
+  "tags": ["calculator", "tests"],
+  "difficulty": "easy",
+  "success": [
+    {
+      "command": "{python} -m pytest tests/test_calculator.py",
+      "exit_code": 0,
+      "timeout_seconds": 60
+    }
+  ]
+}

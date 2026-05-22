@@ -1,0 +1,16 @@
+﻿{
+  "id": "refactor_duplicate_code",
+  "workspace": "../repos/mini_py",
+  "prompt": "Refactor text_utils.py to avoid repeated whitespace normalization logic while preserving behavior.",
+  "expected": "pass",
+  "category": "refactor",
+  "tags": ["text", "cleanup"],
+  "difficulty": "easy",
+  "success": [
+    {
+      "command": "{python} -m pytest tests/test_text_utils.py",
+      "exit_code": 0,
+      "timeout_seconds": 60
+    }
+  ]
+}

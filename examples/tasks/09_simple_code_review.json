@@ -1,0 +1,10 @@
+﻿{
+  "id": "simple_code_review",
+  "workspace": "../repos/mini_py",
+  "prompt": "Review current diff and report risks, changed files, and test suggestions.",
+  "expected": "analysis_only",
+  "category": "review",
+  "tags": ["subagent", "diff"],
+  "difficulty": "easy",
+  "success": []
+}

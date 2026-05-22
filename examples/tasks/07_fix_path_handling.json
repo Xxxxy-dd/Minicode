@@ -1,0 +1,16 @@
+﻿{
+  "id": "fix_path_handling",
+  "workspace": "../repos/mini_py",
+  "prompt": "Make filename() handle both POSIX and Windows-style paths.",
+  "expected": "pass",
+  "category": "bugfix",
+  "tags": ["paths", "windows"],
+  "difficulty": "easy",
+  "success": [
+    {
+      "command": "{python} -m pytest tests/test_paths.py",
+      "exit_code": 0,
+      "timeout_seconds": 60
+    }
+  ]
+}

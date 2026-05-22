@@ -1,0 +1,16 @@
+﻿{
+  "id": "add_missing_tests",
+  "workspace": "../repos/mini_py",
+  "prompt": "Add missing tests for divide by zero and title_case extra spaces.",
+  "expected": "pass",
+  "category": "testing",
+  "tags": ["pytest", "coverage"],
+  "difficulty": "easy",
+  "success": [
+    {
+      "command": "{python} -m pytest tests",
+      "exit_code": 0,
+      "timeout_seconds": 60
+    }
+  ]
+}

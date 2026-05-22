@@ -1,0 +1,16 @@
+﻿{
+  "id": "fix_pytest_failure",
+  "workspace": "../repos/mini_py_buggy",
+  "prompt": "Fix the failing pytest related to calculator multiplication.",
+  "expected": "fail",
+  "category": "debugging",
+  "tags": ["pytest", "calculator"],
+  "difficulty": "easy",
+  "success": [
+    {
+      "command": "{python} -m pytest tests/test_calculator.py",
+      "exit_code": 0,
+      "timeout_seconds": 60
+    }
+  ]
+}

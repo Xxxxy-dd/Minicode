@@ -7,6 +7,7 @@ from rich.table import Table
 
 from minicode_agent.agent import AgentLoop
 from minicode_agent.config import MiniCodeConfig
+from minicode_agent.harness import HarnessRunner
 from minicode_agent.memory import MemoryKind, MemoryStore, default_memory_db_path
 from minicode_agent.models import OpenAICompatibleClient
 from minicode_agent.skills import SkillError, SkillRegistry, SkillRouter
@@ -81,9 +82,35 @@ def run(
 
 
 @app.command()
-def eval(taskset: Path = typer.Argument(..., help="Path to a benchmark task set.")) -> None:
+def eval(
+    taskset: Path = typer.Argument(..., help="Path to a benchmark task JSON file or directory."),
+    workspace: Path = typer.Option(
+        Path.cwd(),
+        "--workspace",
+        "-w",
+        help="Root directory for resolving task paths and writing reports.",
+    ),
+    config: str = typer.Option("default", "--config", help="Evaluation config label for reports and workspaces."),
+) -> None:
     """Run the lightweight harness against a task set."""
-    console.print(f"[yellow]Harness is not implemented yet:[/yellow] {taskset}")
+    runner = HarnessRunner(workspace, config=config)
+    results, report_path = runner.run(taskset)
+    table = Table(title="MiniCode Eval")
+    table.add_column("Task", no_wrap=True)
+    table.add_column("Expected")
+    table.add_column("Passed")
+    table.add_column("Runtime")
+    table.add_column("Tools")
+    for result in results:
+        table.add_row(
+            result.task_id,
+            result.expected.value,
+            "yes" if result.passed else "no",
+            f"{result.runtime_seconds:.3f}s",
+            str(result.metrics.get("tool_calls", 0)),
+        )
+    console.print(table)
+    console.print(f"[dim]report: {report_path}[/dim]")
 
 
 @app.command()

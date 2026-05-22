@@ -6,7 +6,7 @@ The first milestone focuses on a clean Python project skeleton and stable module
 
 ## Current Status
 
-Day 11 local deterministic memory v1 is available:
+Day 13 controlled subagent v1 is available:
 
 - CLI entrypoint
 - configuration model
@@ -49,6 +49,19 @@ Day 11 local deterministic memory v1 is available:
 - `minicode memory delete` for correcting stale or mistaken records
 - relevant memory injected into model planning prompts
 - deterministic run-end reflection candidates written to memory
+- deterministic `TaskStateCompressor` for long tool observations
+- structured `history_summary` on `TaskState`
+- `context_compressed` trace events with compression ratio and fallback marker
+- compression metrics on agent runs
+- compressed observations fed into later model turns
+- long single outputs, recent observation bursts, and total history growth trigger compression
+- `spawn_subagent` tool for bounded read-only subagents
+- Explorer subagent with limited read/search/status tools
+- Reviewer subagent with limited diff/read/search/status tools
+- subagent max-step limits and structured results
+- subagent results include allowed and denied tool sets for auditability
+- reviewer subagent reports changed files, risks, and test suggestions
+- `subagent_started` and `subagent_finished` trace events
 - Chinese and English skill aliases
 - mock model tests for model planning
 - package layout
@@ -60,6 +73,7 @@ Day 11 local deterministic memory v1 is available:
 minicode run "fix the failing tests"
 minicode run "inspect project" --model gpt-4.1-mini
 minicode run "inspect project" --no-model
+minicode run "review current diff"
 minicode skills list
 minicode skills show debugging
 minicode skills route "审查 diff"
@@ -68,6 +82,7 @@ minicode memory list
 minicode memory list --query pytest
 minicode memory delete <memory_id>
 minicode tools list
+minicode tools run spawn_subagent --role explorer --task "inspect project"
 minicode tools run read_file --path README.md
 minicode tools run write_file --path notes.txt --content "hello" --approved
 minicode tools run write_file --path nested/notes.txt --content "hello" --create-parents --approved
@@ -98,8 +113,14 @@ calls before the run fails. Skill routing uses deterministic metadata and
 keyword recall with English and Chinese aliases. Route candidates and reasons
 are stored on `AgentState` and in trace events. Memory v1 uses deterministic
 local reflection and admission rules first; LLM-based summary and filtering is
-reserved for a later enhancement. Optional LLM reranking is intentionally left
-for a later polishing pass.
+reserved for a later enhancement. Context compression v1 deterministically
+compresses long observations into structured task state before the next model
+turn, preserving goals, files, failures, and next actions. It triggers on long
+single tool outputs, recent observation bursts, or total history growth.
+Subagents are implemented with MiniCode's own tool runtime and permission
+gateway, not an external agent framework, so they reuse the same sandbox, trace,
+and approval boundaries as normal tools. Optional LLM reranking is intentionally
+left for a later polishing pass.
 
 ## Design Spec
 

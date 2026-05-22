@@ -81,7 +81,8 @@ class ToolExecutor:
             self._trace_observation(observation, started_at)
             return observation
 
-        observation = tool.run(context, arguments)
+        enriched_context = context.model_copy(update={"trace_store": self.trace_store, "run_id": self.run_id})
+        observation = tool.run(enriched_context, arguments)
         observation.metadata.update(
             {
                 "permission": PermissionMode.ALLOW.value if approved else decision.mode.value,

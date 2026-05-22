@@ -2,6 +2,7 @@ import json
 
 from typing import Any
 
+from minicode_agent.core.state import TaskState
 from minicode_agent.memory import MemoryRecord
 from minicode_agent.models.client import ModelMessage
 from minicode_agent.skills import SkillDefinition
@@ -20,6 +21,7 @@ def build_planning_prompt(
     observations: list[dict[str, Any]] | None = None,
     skills: list[SkillDefinition] | None = None,
     memories: list[MemoryRecord] | None = None,
+    task_state: TaskState | None = None,
 ) -> list[ModelMessage]:
     tools = [
         {
@@ -39,6 +41,7 @@ def build_planning_prompt(
     )
     user_payload = {
         "goal": goal,
+        "task_state": task_state.model_dump() if task_state else {"goal": goal},
         "known_files": known_files[:50],
         "recent_observations": (observations or [])[-10:],
         "active_skills": [skill_prompt_payload(skill) for skill in (skills or [])],

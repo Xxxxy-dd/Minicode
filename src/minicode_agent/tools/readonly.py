@@ -163,6 +163,8 @@ def run_git(workspace: Path, args: list[str]) -> tuple[str, dict[str, Any]]:
         cwd=workspace,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=10,
         check=False,
     )

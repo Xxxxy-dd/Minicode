@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from typing import Any
 
+from minicode_agent.context import TaskStateCompressor
 from minicode_agent.core.state import AgentPhase, AgentState, RunMetrics, TaskState
 from minicode_agent.agent.planner import ModelDecision, ModelDrivenPlanner, PlannedAction, RuleBasedPlanner
 from minicode_agent.memory import DeterministicReflectionEngine, MemoryRecord
@@ -13,6 +14,9 @@ from minicode_agent.tools.types import ToolContext, ToolObservation
 
 
 MAX_OBSERVATION_CHARS = 4000
+SINGLE_OBSERVATION_COMPRESSION_CHARS = 3000
+RECENT_OBSERVATIONS_COMPRESSION_CHARS = 5000
+TOTAL_HISTORY_COMPRESSION_CHARS = 8000
 
 
 @dataclass
@@ -65,6 +69,7 @@ class AgentLoop:
         self.active_skills: list[SkillDefinition] = []
         self.reflection_engine = DeterministicReflectionEngine()
         self.active_memories: list[MemoryRecord] = []
+        self.compressor = TaskStateCompressor()
 
     def run(self) -> AgentRunResult:
         self.runtime.trace_store.append(
@@ -214,9 +219,11 @@ class AgentLoop:
                 "metadata": action_result["metadata"],
                 "truncated": action_result["truncated"],
                 "turn": turn_index,
+                "id": f"obs_{turn_index}",
             }
             self.observations.append(observation)
             self._observe("agent_observed", observation)
+            self._maybe_compress_context()
 
             if action_result["ok"]:
                 failed_tool_attempts = 0
@@ -247,6 +254,8 @@ class AgentLoop:
         context = ToolContext(workspace=self.runtime.workspace)
         observation = self._execute_tool(tool, arguments)
         result = self._tool_result(tool, observation)
+        if tool == "spawn_subagent" and observation.ok:
+            self.state.metrics.subagent_calls += 1
         if observation.ok:
             path = arguments.get("path")
             if path:
@@ -344,6 +353,7 @@ class AgentLoop:
                 observations=self.observations,
                 skills=self.active_skills,
                 memories=self.active_memories,
+                task_state=self.state.task_state,
                 turn_index=turn_index,
                 failed_tool_attempts=failed_tool_attempts,
             )
@@ -359,6 +369,67 @@ class AgentLoop:
         self.state.metrics.input_tokens += decision.input_tokens
         self.state.metrics.output_tokens += decision.output_tokens
         return decision
+
+    def _maybe_compress_context(self) -> None:
+        if not self.observations:
+            return
+        single_chars = len(observation_body(self.observations[-1]))
+        recent_chars = sum(len(observation_body(observation)) for observation in self.observations[-3:])
+        total_chars = sum(len(observation_body(observation)) for observation in self.observations)
+        should_compress = (
+            single_chars >= SINGLE_OBSERVATION_COMPRESSION_CHARS
+            or recent_chars >= RECENT_OBSERVATIONS_COMPRESSION_CHARS
+            or total_chars >= TOTAL_HISTORY_COMPRESSION_CHARS
+        )
+        if not should_compress:
+            return
+
+        self._phase(AgentPhase.COMPRESS_CONTEXT, "Compress long recent observations into structured task state.")
+        recent = self.observations[-3:] if total_chars < TOTAL_HISTORY_COMPRESSION_CHARS else self.observations
+        try:
+            result = self.compressor.compress(self.state.task_state, recent)
+        except Exception as exc:
+            result = self.compressor.fallback_compress(self.state.task_state, recent, str(exc))
+        self.state.task_state = result.task_state
+        self.state.metrics.compression_events += 1
+        self.state.metrics.compression_input_chars += result.input_chars
+        self.state.metrics.compression_output_chars += result.output_chars
+        self.state.metrics.compression_ratio_avg = round(
+            self.state.metrics.compression_output_chars / self.state.metrics.compression_input_chars,
+            4,
+        )
+        self.runtime.trace_store.append(
+            self.runtime.run_id,
+            "context_compressed",
+            {
+                "input_chars": result.input_chars,
+                "output_chars": result.output_chars,
+                "ratio": result.ratio,
+                "fallback_used": result.fallback_used,
+                "compressed_observations": result.compressed_observations,
+                "compressed_observation_ids": result.compressed_observation_ids,
+                "compressed_turns": result.compressed_turns,
+                "task_state": result.task_state.model_dump(),
+            },
+        )
+        self.observations[-3:] = [
+            {
+                "tool": "context_compressor",
+                "ok": True,
+                "result": result.summary,
+                "output": result.summary,
+                "error": None,
+                "metadata": {
+                    "input_chars": result.input_chars,
+                    "output_chars": result.output_chars,
+                    "ratio": result.ratio,
+                    "fallback_used": result.fallback_used,
+                },
+                "truncated": False,
+                "id": "compressed_" + "_".join(result.compressed_observation_ids or ["observations"]),
+            }
+        ]
+        self._phase(AgentPhase.PLAN, "Continue planning with compressed context.")
 
     def _load_active_skills(self) -> None:
         active: list[SkillDefinition] = []
@@ -402,3 +473,7 @@ def truncate_text(value: str, max_chars: int) -> str:
     if len(value) <= max_chars:
         return value
     return value[:max_chars] + "\n[truncated]"
+
+
+def observation_body(observation: dict[str, Any]) -> str:
+    return str(observation.get("output") or observation.get("result") or observation.get("error") or "")

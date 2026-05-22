@@ -27,6 +27,7 @@ class TaskState(BaseModel):
     files_relevant: list[str] = Field(default_factory=list)
     files_modified: list[str] = Field(default_factory=list)
     next_actions: list[str] = Field(default_factory=list)
+    history_summary: str | None = None
 
 
 class RunMetrics(BaseModel):
@@ -36,6 +37,10 @@ class RunMetrics(BaseModel):
     subagent_calls: int = 0
     input_tokens: int = 0
     output_tokens: int = 0
+    compression_events: int = 0
+    compression_input_chars: int = 0
+    compression_output_chars: int = 0
+    compression_ratio_avg: float = 0.0
 
 
 class AgentState(BaseModel):

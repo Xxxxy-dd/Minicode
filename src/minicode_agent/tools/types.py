@@ -2,7 +2,9 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
+
+from minicode_agent.trace import TraceStore
 
 
 class RiskLevel(StrEnum):
@@ -38,7 +40,11 @@ class ToolObservation(BaseModel):
 
 
 class ToolContext(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     workspace: Path
+    trace_store: TraceStore | None = None
+    run_id: str | None = None
 
     @property
     def resolved_workspace(self) -> Path:

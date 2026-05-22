@@ -3,6 +3,7 @@ from time import perf_counter
 from typing import Any
 
 from minicode_agent.memory import MemoryRecord
+from minicode_agent.core.state import TaskState
 from minicode_agent.models import ModelClient, ModelResponse, build_planning_prompt, parse_model_plan
 from minicode_agent.skills import SkillDefinition
 from minicode_agent.trace.store import TraceStore
@@ -49,6 +50,15 @@ class RuleBasedPlanner:
         ]
 
     def next_action(self, goal: str, known_files: list[str]) -> PlannedAction:
+        normalized = goal.lower()
+        wants_review = any(token in normalized for token in ("review", "audit", "code review", "审查"))
+        references_change = any(token in normalized for token in ("diff", "change", "current", "修改", "变更"))
+        if wants_review and references_change:
+            return PlannedAction(
+                tool="spawn_subagent",
+                arguments={"role": "reviewer", "task": goal, "max_steps": 2},
+                description="Use the bounded reviewer subagent to inspect the current diff.",
+            )
         if "README.md" in known_files:
             return PlannedAction(
                 tool="read_file",
@@ -84,6 +94,7 @@ class ModelDrivenPlanner:
         observations: list[dict[str, Any]] | None = None,
         skills: list[SkillDefinition] | None = None,
         memories: list[MemoryRecord] | None = None,
+        task_state: TaskState | None = None,
         turn_index: int | None = None,
         failed_tool_attempts: int = 0,
     ) -> ModelDecision:
@@ -94,6 +105,7 @@ class ModelDrivenPlanner:
             observations=observations,
             skills=skills,
             memories=memories,
+            task_state=task_state,
         )
         started_at = perf_counter()
         self._trace(

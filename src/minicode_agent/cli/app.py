@@ -118,6 +118,10 @@ def trace(
         tool = event.payload.get("tool") or event.payload.get("metadata", {}).get("tool", "")
         ok = str(event.payload.get("ok", ""))
         reason = event.payload.get("reason") or event.payload.get("error") or event.payload.get("metadata", {}).get("permission_reason", "")
+        if event.event_type == "context_compressed":
+            tool = "context"
+            ok = f"ratio={event.payload.get('ratio')}"
+            reason = f"fb={event.payload.get('fallback_used')}"
         table.add_row(
             event.timestamp,
             event.run_id,
@@ -308,6 +312,9 @@ def run_tool(
     pattern: str | None = typer.Option(None, "--pattern", help="Search pattern for search_code."),
     command: str | None = typer.Option(None, "--command", help="Command for run_shell or run_tests."),
     arg: list[str] | None = typer.Option(None, "--arg", help="Command argv item. Repeat for each argument."),
+    role: str | None = typer.Option(None, "--role", help="Role for spawn_subagent."),
+    task: str | None = typer.Option(None, "--task", help="Task for spawn_subagent."),
+    subagent_max_steps: int | None = typer.Option(None, "--subagent-max-steps", help="Max steps for spawn_subagent."),
     content: str | None = typer.Option(None, "--content", help="Content for write_file."),
     old_text: str | None = typer.Option(None, "--old-text", help="Exact text to replace for edit_file."),
     new_text: str | None = typer.Option(None, "--new-text", help="Replacement text for edit_file."),
@@ -328,6 +335,9 @@ def run_tool(
         "pattern": pattern,
         "command": command,
         "argv": arg,
+        "role": role,
+        "task": task,
+        "max_steps": subagent_max_steps,
         "content": content,
         "old_text": old_text,
         "new_text": new_text,

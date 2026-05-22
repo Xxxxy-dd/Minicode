@@ -1,0 +1,48 @@
+[
+  {
+    "task_id": "memory_reuse_hint",
+    "config": "full",
+    "expected": "analysis_only",
+    "category": "memory",
+    "tags": [
+      "memory",
+      "procedure",
+      "ablation"
+    ],
+    "difficulty": "easy",
+    "prompt": "Inspect the project and remember the local validation command for future tasks.",
+    "source_workspace": "E:\\VS code\\Agent\\examples\\repos\\mini_py",
+    "workspace": "E:\\VS code\\Agent\\.minicode\\eval_workspaces\\full\\eval_20260522_071434\\memory_reuse_hint",
+    "run_id": "eval_b768bef6",
+    "passed": true,
+    "agent_ok": true,
+    "runtime_seconds": 0.065,
+    "success_results": [],
+    "metrics": {
+      "tool_calls": 2,
+      "retries": 0,
+      "permission_blocks": 0,
+      "subagent_calls": 0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "compression_events": 0,
+      "compression_input_chars": 0,
+      "compression_output_chars": 0,
+      "compression_ratio_avg": 0.0,
+      "memory_candidates": 1,
+      "memory_written": 1,
+      "memory_rejected": 0,
+      "memory_duplicates": 0
+    },
+    "config_features": {
+      "name": "full",
+      "description": "Skills, deterministic memory, compression, and reviewer subagents.",
+      "enable_skills": true,
+      "enable_memory": true,
+      "enable_compression": true,
+      "enable_subagents": true,
+      "memory_reflection_mode": "deterministic"
+    },
+    "trace_path": "E:\\VS code\\Agent\\.minicode\\eval_workspaces\\full\\eval_20260522_071434\\memory_reuse_hint\\.minicode\\traces\\trace.jsonl"
+  }
+]

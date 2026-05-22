@@ -6,7 +6,7 @@ The first milestone focuses on a clean Python project skeleton and stable module
 
 ## Current Status
 
-Day 15 benchmark task set v1 is available:
+Day 16 ablation experiments v1 are available:
 
 - CLI entrypoint
 - configuration model
@@ -72,6 +72,15 @@ Day 15 benchmark task set v1 is available:
 - eval tasks run in isolated copied workspaces under `.minicode/eval_workspaces/`
 - eval supports config labels for Day 16 ablation reports
 - benchmark tasks include expected outcome, category, tags, and difficulty metadata
+- ablation presets: `baseline`, `skill_only`, `memory_skill`, `memory_llm`, `full`, `full_llm_memory`
+- eval configs control AgentLoop skill routing, memory, compression, and subagent availability
+- `minicode eval ... --config all` runs every ablation preset and writes a comparison report
+- eval reports include feature flags and memory reflection mode for reproducibility
+- LLM memory reflection engine with deterministic admission fallback
+- memory quality metrics: candidates, written, rejected, and duplicates
+- eval reports also emit `results.json` and `summary.csv`
+- `minicode eval --list-configs` shows built-in ablation presets
+- `minicode eval ... --config-file custom.json` supports custom JSON eval configs
 - Chinese and English skill aliases
 - mock model tests for model planning
 - package layout
@@ -103,6 +112,9 @@ minicode tools run run_tests --command "python -m pytest tests" --approved
 minicode trace
 minicode trace <run_id> --json
 minicode eval examples/tasks --config baseline
+minicode eval examples/tasks --config all
+minicode eval examples/tasks --list-configs
+minicode eval examples/tasks --config-file custom_ablation.json
 ```
 
 Model-backed runs use OpenAI-compatible chat completions. Prefer MiniCode-specific
@@ -134,8 +146,16 @@ evaluation runner used by Day 15 benchmark tasks and Day 16 ablation experiments
 Benchmark v1 adds a 10-task local task set covering pytest repair, small feature
 work, boundary fixes, refactoring, docs, type hints, path handling, tests, review,
 and safety checks. Eval tasks are copied into isolated workspaces before running,
-and reports are grouped by config labels for Day 16 ablation experiments. Optional
-LLM reranking is intentionally left for a later polishing pass.
+and reports are grouped by config labels for Day 16 ablation experiments. Ablation
+configs can disable skills, memory, compression, and subagents so reports compare
+pass rate, runtime, tool calls, retries, compression events, subagent calls, and
+memory quality metrics. The `memory_llm` and `full_llm_memory` configs use the
+model-backed memory reflection engine when a model client is available, then
+reuse the deterministic admission rules for confidence, duplicate detection, and
+secret rejection. Without a model client they record the fallback reason and use
+deterministic reflection. Reports are written as Markdown plus `results.json`
+and `summary.csv` for later charts or resume metrics. Optional LLM reranking is
+intentionally left for a later polishing pass.
 
 ## Design Spec
 

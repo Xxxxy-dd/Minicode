@@ -1,0 +1,10 @@
+{
+  "id": "compression_long_context",
+  "workspace": "../repos/mini_py",
+  "prompt": "Summarize the project after reading enough context to exercise context compression.",
+  "expected": "analysis_only",
+  "category": "context",
+  "tags": ["compression", "long-context", "ablation"],
+  "difficulty": "medium",
+  "success": []
+}

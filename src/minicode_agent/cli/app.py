@@ -7,7 +7,7 @@ from rich.table import Table
 
 from minicode_agent.agent import AgentLoop
 from minicode_agent.config import MiniCodeConfig
-from minicode_agent.harness import HarnessRunner
+from minicode_agent.harness import HarnessRunner, ablation_config_names, load_ablation_config_file, resolve_ablation_config, run_all_configs
 from minicode_agent.memory import MemoryKind, MemoryStore, default_memory_db_path
 from minicode_agent.models import OpenAICompatibleClient
 from minicode_agent.skills import SkillError, SkillRegistry, SkillRouter
@@ -90,12 +90,44 @@ def eval(
         "-w",
         help="Root directory for resolving task paths and writing reports.",
     ),
-    config: str = typer.Option("default", "--config", help="Evaluation config label for reports and workspaces."),
+    config: str = typer.Option("default", "--config", help="Evaluation config name, or 'all' for Day 16 ablations."),
+    config_file: Path | None = typer.Option(None, "--config-file", help="Path to a custom ablation config JSON file."),
+    list_configs: bool = typer.Option(False, "--list-configs", help="List built-in eval configs and exit."),
 ) -> None:
     """Run the lightweight harness against a task set."""
-    runner = HarnessRunner(workspace, config=config)
-    results, report_path = runner.run(taskset)
+    if list_configs:
+        table = Table(title="MiniCode Eval Configs")
+        table.add_column("Name", no_wrap=True)
+        table.add_column("Skills")
+        table.add_column("Memory")
+        table.add_column("Compression")
+        table.add_column("Subagents")
+        table.add_column("Memory Mode")
+        table.add_column("Description")
+        for name in ablation_config_names():
+            preset = resolve_ablation_config(name)
+            table.add_row(
+                preset.name,
+                str(preset.enable_skills),
+                str(preset.enable_memory),
+                str(preset.enable_compression),
+                str(preset.enable_subagents),
+                preset.memory_reflection_mode,
+                preset.description,
+            )
+        console.print(table)
+        return
+    if config_file:
+        custom_config = load_ablation_config_file(config_file)
+        runner = HarnessRunner(workspace, ablation_config=custom_config)
+        results, report_path = runner.run(taskset)
+    elif config == "all":
+        results, report_path = run_all_configs(workspace, taskset)
+    else:
+        runner = HarnessRunner(workspace, config=config)
+        results, report_path = runner.run(taskset)
     table = Table(title="MiniCode Eval")
+    table.add_column("Config", no_wrap=True)
     table.add_column("Task", no_wrap=True)
     table.add_column("Expected")
     table.add_column("Passed")
@@ -103,6 +135,7 @@ def eval(
     table.add_column("Tools")
     for result in results:
         table.add_row(
+            result.config,
             result.task_id,
             result.expected.value,
             "yes" if result.passed else "no",

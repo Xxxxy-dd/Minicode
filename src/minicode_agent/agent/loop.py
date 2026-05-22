@@ -4,7 +4,7 @@ from typing import Any
 from minicode_agent.context import TaskStateCompressor
 from minicode_agent.core.state import AgentPhase, AgentState, RunMetrics, TaskState
 from minicode_agent.agent.planner import ModelDecision, ModelDrivenPlanner, PlannedAction, RuleBasedPlanner
-from minicode_agent.memory import DeterministicReflectionEngine, MemoryRecord
+from minicode_agent.memory import DeterministicReflectionEngine, LLMReflectionEngine, MemoryRecord
 from minicode_agent.models import ModelClient
 from minicode_agent.runtime import RuntimeContext
 from minicode_agent.skills import SkillDefinition, SkillError, SkillRegistry, SkillRouter
@@ -35,6 +35,11 @@ class AgentLoop:
         max_steps: int = 30,
         max_failed_tool_attempts: int = 2,
         model_client: ModelClient | None = None,
+        enable_skills: bool = True,
+        enable_memory: bool = True,
+        enable_compression: bool = True,
+        enable_subagents: bool = True,
+        memory_reflection_mode: str = "deterministic",
     ) -> None:
         self.runtime = runtime
         self.max_steps = max_steps
@@ -48,7 +53,12 @@ class AgentLoop:
             metrics=RunMetrics(),
         )
         self.transcript: list[dict[str, Any]] = []
-        registry = create_default_registry()
+        self.enable_skills = enable_skills
+        self.enable_memory = enable_memory
+        self.enable_compression = enable_compression
+        self.enable_subagents = enable_subagents
+        self.memory_reflection_mode = memory_reflection_mode
+        registry = create_default_registry(include_subagents=enable_subagents)
         self.executor = ToolExecutor(
             registry,
             trace_store=runtime.trace_store,
@@ -68,6 +78,7 @@ class AgentLoop:
         self.skill_router = SkillRouter(self.skill_registry)
         self.active_skills: list[SkillDefinition] = []
         self.reflection_engine = DeterministicReflectionEngine()
+        self.llm_reflection_engine = LLMReflectionEngine(model_client, self.reflection_engine) if model_client else None
         self.active_memories: list[MemoryRecord] = []
         self.compressor = TaskStateCompressor()
 
@@ -79,13 +90,14 @@ class AgentLoop:
                 "goal": self.state.user_goal,
                 "workspace": self.state.workspace,
                 "max_steps": self.max_steps,
+                "features": self._feature_flags(),
             },
         )
         self._phase(AgentPhase.INIT, "Initialize agent state.")
 
         self._phase(AgentPhase.LOAD_CONTEXT, "Load workspace rules and trace context.")
         known_files = self._load_context()
-        self.active_memories = self.runtime.memory_store.search(self.state.user_goal)
+        self.active_memories = self.runtime.memory_store.search(self.state.user_goal) if self.enable_memory else []
         self._observe(
             "context_loaded",
             {
@@ -96,15 +108,20 @@ class AgentLoop:
         )
 
         self._phase(AgentPhase.SELECT_SKILL, "Select a skill for the task.")
-        route_result = self.skill_router.route(self.state.user_goal)
-        self.state.selected_skills = route_result.selected
-        self.state.skill_candidates = [
-            {"name": candidate.name, "score": candidate.score, "reasons": candidate.reasons}
-            for candidate in route_result.candidates
-        ]
-        self.state.skill_route_reasons = route_result.reasons
-        if self.state.selected_skills:
-            self._load_active_skills()
+        if self.enable_skills:
+            route_result = self.skill_router.route(self.state.user_goal)
+            self.state.selected_skills = route_result.selected
+            self.state.skill_candidates = [
+                {"name": candidate.name, "score": candidate.score, "reasons": candidate.reasons}
+                for candidate in route_result.candidates
+            ]
+            self.state.skill_route_reasons = route_result.reasons
+            if self.state.selected_skills:
+                self._load_active_skills()
+        else:
+            self.state.selected_skills = []
+            self.state.skill_candidates = []
+            self.state.skill_route_reasons = {}
         self._observe(
             "skill_selected",
             {
@@ -160,6 +177,7 @@ class AgentLoop:
                 "reason": self.failure_reason,
                 "metrics": self.state.metrics.model_dump(),
                 "selected_skills": self.state.selected_skills,
+                "features": self._feature_flags(),
             },
         )
         return AgentRunResult(state=self.state, transcript=self.transcript)
@@ -297,13 +315,35 @@ class AgentLoop:
 
     def _reflect(self) -> None:
         self.state.task_state.decisions.append("Keep the first loop minimal and traceable.")
-        candidates = self.reflection_engine.generate(self.state, self.transcript)
+        if not self.enable_memory:
+            self._observe("memory_reflected", self._memory_stats(0, 0, 0, mode="off"))
+            return
+        llm_fallback = False
+        llm_error = None
+        if self.memory_reflection_mode == "llm" and self.llm_reflection_engine:
+            candidates, llm_fallback, llm_error = self.llm_reflection_engine.generate_with_fallback(self.state, self.transcript)
+        else:
+            if self.memory_reflection_mode == "llm":
+                llm_fallback = True
+                llm_error = "model client unavailable"
+            candidates = self.reflection_engine.generate(self.state, self.transcript)
+        if self.memory_reflection_mode == "llm":
+            self._observe(
+                "memory_llm_requested",
+                {
+                    "fallback": llm_fallback,
+                    "reason": llm_error,
+                },
+            )
         written = 0
         skipped = 0
+        rejected_reasons: dict[str, int] = {}
+        duplicates = 0
         for candidate in candidates:
             record, admission_reason = self.reflection_engine.admit(candidate)
             if record is None:
                 skipped += 1
+                rejected_reasons[admission_reason] = rejected_reasons.get(admission_reason, 0) + 1
                 self._observe("memory_rejected", {"kind": candidate.kind.value, "reason": admission_reason})
                 continue
             try:
@@ -318,6 +358,7 @@ class AgentLoop:
                 )
             except ValueError as exc:
                 skipped += 1
+                rejected_reasons[str(exc)] = rejected_reasons.get(str(exc), 0) + 1
                 self._observe("memory_rejected", {"kind": record.kind.value, "reason": str(exc)})
                 continue
             if inserted:
@@ -333,12 +374,26 @@ class AgentLoop:
                     },
                 )
             else:
+                duplicates += 1
                 skipped += 1
-        self._observe("memory_reflected", {"candidates": len(candidates), "written": written, "skipped": skipped})
+        self._observe("memory_reflected", self._memory_stats(len(candidates), written, skipped, duplicates, rejected_reasons))
 
     def _plan_action(self, known_files: list[str]) -> PlannedAction | None:
         self.state.task_state.next_actions = self.rule_planner.plan_steps(self.state.user_goal)
-        return self.rule_planner.next_action(self.state.user_goal, known_files)
+        planned = self.rule_planner.next_action(self.state.user_goal, known_files)
+        if planned.tool == "spawn_subagent" and not self.enable_subagents:
+            if "README.md" in known_files:
+                return PlannedAction(
+                    tool="read_file",
+                    arguments={"path": "README.md"},
+                    description="Inspect README.md because subagents are disabled by the eval config.",
+                )
+            return PlannedAction(
+                tool="list_files",
+                arguments={},
+                description="List workspace files because subagents are disabled by the eval config.",
+            )
+        return planned
 
     def _plan_model_decision(
         self,
@@ -362,7 +417,7 @@ class AgentLoop:
             self.state.task_state.failed_attempts.append(str(exc))
             self._observe("planning_failed", {"reason": str(exc), "planner": "model", "turn": turn_index})
             return None
-        if decision.selected_skill:
+        if self.enable_skills and decision.selected_skill:
             self.state.selected_skills = [decision.selected_skill]
             self._load_active_skills()
         self.state.task_state.next_actions = decision.next_actions
@@ -371,6 +426,8 @@ class AgentLoop:
         return decision
 
     def _maybe_compress_context(self) -> None:
+        if not self.enable_compression:
+            return
         if not self.observations:
             return
         single_chars = len(observation_body(self.observations[-1]))
@@ -458,6 +515,9 @@ class AgentLoop:
         self.runtime.trace_store.append(self.runtime.run_id, event_type, payload)
 
     def _execute_tool(self, name: str, arguments: dict[str, Any]):
+        if name == "spawn_subagent" and not self.enable_subagents:
+            self.failure_reason = "subagents disabled by eval config"
+            raise RuntimeError(self.failure_reason)
         if self.steps >= self.max_steps:
             self.failure_reason = "max agent steps exceeded"
             raise RuntimeError(self.failure_reason)
@@ -467,6 +527,37 @@ class AgentLoop:
         if not observation.ok and observation.metadata.get("permission") == "deny":
             self.state.metrics.permission_blocks += 1
         return observation
+
+    def _feature_flags(self) -> dict[str, bool | str]:
+        return {
+            "skills": self.enable_skills,
+            "memory": self.enable_memory,
+            "compression": self.enable_compression,
+            "subagents": self.enable_subagents,
+            "memory_reflection_mode": self.memory_reflection_mode,
+        }
+
+    def _memory_stats(
+        self,
+        candidates: int,
+        written: int,
+        skipped: int,
+        duplicates: int = 0,
+        rejected_reasons: dict[str, int] | None = None,
+        mode: str | None = None,
+    ) -> dict[str, Any]:
+        self.state.metrics.memory_candidates += candidates
+        self.state.metrics.memory_written += written
+        self.state.metrics.memory_rejected += skipped
+        self.state.metrics.memory_duplicates += duplicates
+        return {
+            "candidates": candidates,
+            "written": written,
+            "skipped": skipped,
+            "duplicates": duplicates,
+            "rejected_reasons": rejected_reasons or {},
+            "mode": mode or self.memory_reflection_mode,
+        }
 
 
 def truncate_text(value: str, max_chars: int) -> str:

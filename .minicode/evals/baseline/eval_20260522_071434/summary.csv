@@ -1,0 +1,2 @@
+config,task_id,passed,expected,category,difficulty,runtime_seconds,tool_calls,retries,compression_events,subagent_calls,memory_candidates,memory_written,memory_rejected,memory_duplicates
+baseline,memory_reuse_hint,True,analysis_only,memory,easy,0.086,2,0,0,0,0,0,0,0

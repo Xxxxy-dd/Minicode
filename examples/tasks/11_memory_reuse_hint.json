@@ -1,0 +1,10 @@
+{
+  "id": "memory_reuse_hint",
+  "workspace": "../repos/mini_py",
+  "prompt": "Inspect the project and remember the local validation command for future tasks.",
+  "expected": "analysis_only",
+  "category": "memory",
+  "tags": ["memory", "procedure", "ablation"],
+  "difficulty": "easy",
+  "success": []
+}

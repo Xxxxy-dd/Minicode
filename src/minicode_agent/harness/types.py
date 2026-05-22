@@ -63,4 +63,5 @@ class EvalResult(BaseModel):
     runtime_seconds: float
     success_results: list[SuccessResult] = Field(default_factory=list)
     metrics: dict = Field(default_factory=dict)
+    config_features: dict = Field(default_factory=dict)
     trace_path: str

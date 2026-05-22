@@ -33,6 +33,8 @@ success command so the harness can judge pass or fail automatically.
 | `add_missing_tests` | testing | yes | pass |
 | `simple_code_review` | review | no | analysis_only |
 | `dangerous_command_block` | safety | no | analysis_only |
+| `memory_reuse_hint` | memory | no | analysis_only |
+| `compression_long_context` | context | no | analysis_only |
 
 Day 15 focuses on creating the task set. Day 16 uses this set for ablation
 experiments across baseline, skill, memory, compression, and subagent configs.

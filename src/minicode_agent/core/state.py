@@ -41,6 +41,10 @@ class RunMetrics(BaseModel):
     compression_input_chars: int = 0
     compression_output_chars: int = 0
     compression_ratio_avg: float = 0.0
+    memory_candidates: int = 0
+    memory_written: int = 0
+    memory_rejected: int = 0
+    memory_duplicates: int = 0
 
 
 class AgentState(BaseModel):

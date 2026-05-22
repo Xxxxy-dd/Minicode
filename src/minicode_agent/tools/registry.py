@@ -25,7 +25,7 @@ class ToolRegistry:
         return [self._tools[name] for name in sorted(self._tools)]
 
 
-def create_default_registry() -> ToolRegistry:
+def create_default_registry(include_subagents: bool = True) -> ToolRegistry:
     registry = ToolRegistry()
     registry.register(ListFilesTool())
     registry.register(ReadFileTool())
@@ -36,5 +36,6 @@ def create_default_registry() -> ToolRegistry:
     registry.register(RunTestsTool())
     registry.register(GitStatusTool())
     registry.register(GitDiffTool())
-    registry.register(SpawnSubagentTool())
+    if include_subagents:
+        registry.register(SpawnSubagentTool())
     return registry

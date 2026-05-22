@@ -1,8 +1,20 @@
+import json
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 
 from minicode_agent.core.state import AgentPhase, AgentState
 from minicode_agent.memory.store import MemoryKind, MemoryRecord, contains_secret
+
+
+@dataclass(frozen=True)
+class ReflectionModelMessage:
+    role: str
+    content: str
+
+
+class ReflectionModelClient(Protocol):
+    def complete(self, messages: list[ReflectionModelMessage]):
+        """Return an object with a string content attribute."""
 
 
 @dataclass(frozen=True)
@@ -86,6 +98,52 @@ class DeterministicReflectionEngine:
         )
 
 
+class LLMReflectionEngine:
+    """Model-backed memory candidate generator with deterministic admission."""
+
+    def __init__(self, model_client: ReflectionModelClient, fallback: DeterministicReflectionEngine | None = None) -> None:
+        self.model_client = model_client
+        self.fallback = fallback or DeterministicReflectionEngine()
+
+    def generate(self, state: AgentState, observations: list[dict[str, Any]]) -> list[MemoryCandidate]:
+        messages = [
+            ReflectionModelMessage(
+                role="system",
+                content=(
+                    "You generate durable memory candidates for MiniCode Agent. "
+                    "Return only JSON with a 'memories' array. Each memory must have: kind, content, "
+                    "confidence, tags, reason. Allowed kinds: project_memory, user_memory, "
+                    "procedure_memory, failure_memory. Do not include secrets or raw credentials."
+                ),
+            ),
+            ReflectionModelMessage(
+                role="user",
+                content=json.dumps(
+                    {
+                        "run_id": state.run_id,
+                        "goal": state.user_goal,
+                        "final_phase": state.current_phase.value,
+                        "files_touched": state.files_touched,
+                        "failed_attempts": state.task_state.failed_attempts[-5:],
+                        "decisions": state.task_state.decisions[-5:],
+                        "metrics": state.metrics.model_dump(),
+                        "observations": compact_observations(observations),
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+            ),
+        ]
+        response = self.model_client.complete(messages)
+        return parse_llm_memory_candidates(response.content, state.run_id)
+
+    def generate_with_fallback(self, state: AgentState, observations: list[dict[str, Any]]) -> tuple[list[MemoryCandidate], bool, str | None]:
+        try:
+            return self.generate(state, observations), False, None
+        except Exception as exc:
+            return self.fallback.generate(state, observations), True, str(exc)
+
+
 def unique_strings(values) -> list[str]:
     seen: set[str] = set()
     result: list[str] = []
@@ -96,3 +154,83 @@ def unique_strings(values) -> list[str]:
         seen.add(text)
         result.append(text)
     return result
+
+
+def parse_llm_memory_candidates(content: str, source_run_id: str) -> list[MemoryCandidate]:
+    try:
+        payload = json.loads(content)
+    except json.JSONDecodeError as exc:
+        raise ValueError("LLM memory response must be valid JSON.") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("LLM memory response must be a JSON object.")
+    memories = payload.get("memories", [])
+    if not isinstance(memories, list):
+        raise ValueError("LLM memory response field 'memories' must be a list.")
+
+    candidates: list[MemoryCandidate] = []
+    for index, item in enumerate(memories):
+        if not isinstance(item, dict):
+            raise ValueError(f"LLM memory item {index} must be an object.")
+        kind = parse_memory_kind(item.get("kind"), index)
+        content_text = required_text(item.get("content"), f"memories[{index}].content")
+        confidence = parse_confidence(item.get("confidence", 0.5), index)
+        tags = parse_tags(item.get("tags", []), index)
+        reason = required_text(item.get("reason"), f"memories[{index}].reason")
+        candidates.append(
+            MemoryCandidate(
+                kind=kind,
+                content=content_text,
+                confidence=confidence,
+                source_run_id=source_run_id,
+                tags=["llm_reflection", *tags],
+                reason=reason,
+                metadata={"generator": "llm", "index": index},
+            )
+        )
+    return candidates
+
+
+def parse_memory_kind(value: Any, index: int) -> MemoryKind:
+    if not isinstance(value, str):
+        raise ValueError(f"LLM memory item {index} kind must be a string.")
+    try:
+        return MemoryKind(value)
+    except ValueError as exc:
+        raise ValueError(f"LLM memory item {index} has unknown kind: {value}") from exc
+
+
+def parse_confidence(value: Any, index: int) -> float:
+    if not isinstance(value, int | float):
+        raise ValueError(f"LLM memory item {index} confidence must be a number.")
+    confidence = float(value)
+    if confidence < 0 or confidence > 1:
+        raise ValueError(f"LLM memory item {index} confidence must be between 0 and 1.")
+    return confidence
+
+
+def parse_tags(value: Any, index: int) -> list[str]:
+    if not isinstance(value, list):
+        raise ValueError(f"LLM memory item {index} tags must be a list.")
+    return [str(tag).strip() for tag in value if str(tag).strip()]
+
+
+def required_text(value: Any, field: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"LLM memory response field '{field}' must be a non-empty string.")
+    return value.strip()
+
+
+def compact_observations(observations: list[dict[str, Any]], limit: int = 8, max_chars: int = 500) -> list[dict[str, Any]]:
+    compacted: list[dict[str, Any]] = []
+    for observation in observations[-limit:]:
+        payload = observation.get("payload", observation)
+        text = str(payload.get("result") or payload.get("output") or payload.get("error") or "")
+        compacted.append(
+            {
+                "event": observation.get("event"),
+                "tool": payload.get("tool"),
+                "ok": payload.get("ok"),
+                "text": text[:max_chars],
+            }
+        )
+    return compacted

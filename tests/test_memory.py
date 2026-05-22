@@ -2,9 +2,10 @@ from typer.testing import CliRunner
 
 from minicode_agent.agent import AgentLoop
 from minicode_agent.cli.app import app
-from minicode_agent.memory import DeterministicReflectionEngine, MemoryKind, MemoryStore
+from minicode_agent.memory import DeterministicReflectionEngine, LLMReflectionEngine, MemoryKind, MemoryStore, parse_llm_memory_candidates
 from minicode_agent.memory.reflection import MemoryCandidate
 from minicode_agent.models import build_planning_prompt
+from minicode_agent.models import ModelResponse
 from minicode_agent.runtime import RuntimeContext
 from minicode_agent.tools.registry import create_default_registry
 
@@ -194,3 +195,90 @@ def test_agent_loop_writes_reflection_memory(tmp_path) -> None:
     assert any(record.source_run_id == "agent_memory_test" for record in records)
     events = runtime.trace_store.list_events("agent_memory_test")
     assert "memory_written" in [event.event_type for event in events]
+
+
+def test_parse_llm_memory_candidates_accepts_structured_json() -> None:
+    candidates = parse_llm_memory_candidates(
+        """
+        {
+          "memories": [
+            {
+              "kind": "procedure_memory",
+              "content": "Run python -m pytest tests before finishing.",
+              "confidence": 0.8,
+              "tags": ["tests"],
+              "reason": "Observed successful validation."
+            }
+          ]
+        }
+        """,
+        "run_1",
+    )
+
+    assert candidates[0].kind == MemoryKind.PROCEDURE
+    assert candidates[0].source_run_id == "run_1"
+    assert "llm_reflection" in candidates[0].tags
+
+
+def test_llm_reflection_engine_uses_model_client(tmp_path) -> None:
+    class MemoryModel:
+        def __init__(self) -> None:
+            self.messages = []
+            self.responses = [
+                """
+                {
+                  "summary": "Read README.",
+                  "selected_skill": null,
+                  "next_actions": ["Read README.md."],
+                  "stop": false,
+                  "final_answer": null,
+                  "action": {"tool": "read_file", "arguments": {"path": "README.md"}}
+                }
+                """,
+                """
+                {
+                  "summary": "Done.",
+                  "selected_skill": null,
+                  "next_actions": ["Reflect."],
+                  "stop": true,
+                  "final_answer": "README inspected.",
+                  "action": null
+                }
+                """,
+                """
+                {
+                  "memories": [
+                    {
+                      "kind": "project_memory",
+                      "content": "README.md explains the demo project.",
+                      "confidence": 0.7,
+                      "tags": ["docs"],
+                      "reason": "The run inspected README."
+                    }
+                  ]
+                }
+                """,
+            ]
+
+        def complete(self, messages):
+            self.messages.append(messages)
+            return ModelResponse(self.responses.pop(0))
+
+    (tmp_path / "README.md").write_text("# Demo\n", encoding="utf-8")
+    runtime = RuntimeContext.create(tmp_path, run_id="agent_llm_memory_test")
+    model = MemoryModel()
+
+    result = AgentLoop(
+        runtime,
+        "inspect project",
+        model_client=model,
+        memory_reflection_mode="llm",
+    ).run()
+
+    assert result.state.current_phase.value == "done"
+    assert runtime.memory_store.list()[0].content == "README.md explains the demo project."
+    assert len(model.messages) >= 2
+    events = runtime.trace_store.list_events("agent_llm_memory_test")
+    memory_event = next(event for event in events if event.event_type == "memory_reflected")
+    assert memory_event.payload["mode"] == "llm"
+    assert memory_event.payload["written"] == 1

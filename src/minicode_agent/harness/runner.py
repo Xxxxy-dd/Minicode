@@ -12,6 +12,8 @@ from pathlib import Path
 from minicode_agent.agent import AgentLoop
 from minicode_agent.harness.configs import AblationConfig, ablation_config_names, load_ablation_config_file, resolve_ablation_config
 from minicode_agent.harness.types import EvalResult, HarnessTask, SuccessCommand, SuccessResult
+from minicode_agent.models import OpenAICompatibleClient
+from minicode_agent.config import MiniCodeConfig
 from minicode_agent.runtime import RuntimeContext
 
 
@@ -46,7 +48,13 @@ class HarnessRunner:
         started_at = time.perf_counter()
         workspace = self.prepare_workspace(task)
         runtime = RuntimeContext.create(workspace, run_kind="eval")
-        result = AgentLoop(runtime, task.prompt, **self.ablation_config.agent_kwargs()).run()
+        aux_model_client = self._build_aux_model_client()
+        result = AgentLoop(
+            runtime,
+            task.prompt,
+            aux_model_client=aux_model_client,
+            **self.ablation_config.agent_kwargs(),
+        ).run()
         success_results = [run_success_command(command, workspace) for command in task.success]
         agent_ok = result.state.current_phase.value == "done"
         command_passed = all(success.passed for success in success_results)
@@ -81,6 +89,7 @@ class HarnessRunner:
             success_results=success_results,
             metrics=result.state.metrics.model_dump(),
             config_features=self.ablation_config.model_dump(),
+            memory_summary=result.state.task_state.history_summary,
             trace_path=str(runtime.trace_store.storage_path),
         )
 
@@ -107,6 +116,16 @@ class HarnessRunner:
             ignore=shutil.ignore_patterns(".git", ".minicode", ".pytest_cache", "__pycache__"),
         )
         return target
+
+    def _build_aux_model_client(self):
+        config = MiniCodeConfig.from_env(self.root)
+        if not config.model_name:
+            return None
+        return OpenAICompatibleClient(
+            model=config.model_name,
+            api_key=config.model_api_key,
+            base_url=config.model_base_url,
+        )
 
 
 def run_success_command(command: SuccessCommand, workspace: Path) -> SuccessResult:
@@ -182,11 +201,12 @@ def render_report(results: list[EvalResult], config: AblationConfig | None = Non
         f"- compression: {features.get('enable_compression', False)}",
         f"- subagents: {features.get('enable_subagents', False)}",
         f"- memory_reflection_mode: {features.get('memory_reflection_mode', 'off')}",
+        f"- skill_rerank: {features.get('enable_skill_rerank', False)}",
         f"- passed: {passed}",
         f"- pass_rate: {pass_rate:.2%}",
         "",
-        "| Task | Category | Expected | Passed | Runtime | Tool Calls | Retries | Compression | Subagents | Memory Written | Memory Rejected | Trace |",
-        "| --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
+        "| Task | Category | Expected | Passed | Runtime | Tool Calls | Retries | Skill Reranks | Memory LLM | Compression | Subagents | Memory Written | Memory Rejected | Trace |",
+        "| --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
     ]
     for result in results:
         metrics = result.metrics
@@ -201,6 +221,8 @@ def render_report(results: list[EvalResult], config: AblationConfig | None = Non
                     f"{result.runtime_seconds:.3f}s",
                     str(metrics.get("tool_calls", 0)),
                     str(metrics.get("retries", 0)),
+                    str(metrics.get("skill_rerank_calls", 0)),
+                    str(metrics.get("memory_llm_calls", 0)),
                     str(metrics.get("compression_events", 0)),
                     str(metrics.get("subagent_calls", 0)),
                     str(metrics.get("memory_written", 0)),
@@ -226,6 +248,7 @@ def render_report(results: list[EvalResult], config: AblationConfig | None = Non
                 f"- run_id: `{result.run_id}`",
                 f"- agent_ok: {result.agent_ok}",
                 f"- config_features: `{json.dumps(result.config_features, ensure_ascii=False)}`",
+                f"- memory_summary: `{result.memory_summary or '(none)'}`",
             ]
         )
         for success in result.success_results:
@@ -248,8 +271,8 @@ def render_comparison_report(results: list[EvalResult], report_paths: list[Path]
     lines = [
         "# MiniCode Ablation Comparison",
         "",
-        "| Config | Tasks | Passed | Pass Rate | Avg Runtime | Tool Calls | Retries | Compression | Subagents | Memory Mode |",
-        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
+        "| Config | Tasks | Passed | Pass Rate | Avg Runtime | Tool Calls | Retries | Skill Reranks | Memory LLM | Compression | Subagents | Memory Mode |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
     ]
     for config_name in ablation_config_names():
         group = grouped.get(config_name, [])
@@ -259,6 +282,8 @@ def render_comparison_report(results: list[EvalResult], report_paths: list[Path]
         avg_runtime = (sum(result.runtime_seconds for result in group) / total) if total else 0
         tool_calls = sum(int(result.metrics.get("tool_calls", 0)) for result in group)
         retries = sum(int(result.metrics.get("retries", 0)) for result in group)
+        skill_reranks = sum(int(result.metrics.get("skill_rerank_calls", 0)) for result in group)
+        memory_llm = sum(int(result.metrics.get("memory_llm_calls", 0)) for result in group)
         compression = sum(int(result.metrics.get("compression_events", 0)) for result in group)
         subagents = sum(int(result.metrics.get("subagent_calls", 0)) for result in group)
         features = group[0].config_features if group else resolve_ablation_config(config_name).model_dump()
@@ -273,6 +298,8 @@ def render_comparison_report(results: list[EvalResult], report_paths: list[Path]
                     f"{avg_runtime:.3f}s",
                     str(tool_calls),
                     str(retries),
+                    str(skill_reranks),
+                    str(memory_llm),
                     str(compression),
                     str(subagents),
                     str(features.get("memory_reflection_mode", "off")),
@@ -298,11 +325,15 @@ def experiment_notes(grouped: dict[str, list[EvalResult]]) -> list[str]:
         delta_tools = summary["tool_calls"] - baseline["tool_calls"]
         notes.append(
             f"- `{config_name}` vs `baseline`: pass_rate {delta_pass:+.2%}, "
-            f"tool_calls {delta_tools:+.0f}, memory_written {summary['memory_written']:.0f}, "
+            f"tool_calls {delta_tools:+.0f}, skill_rerank_calls {summary['skill_rerank_calls']:.0f}, "
+            f"memory_llm_calls {summary['memory_llm_calls']:.0f}, memory_written {summary['memory_written']:.0f}, "
             f"subagent_calls {summary['subagent_calls']:.0f}."
         )
     notes.append(
         "- LLM memory configs call the LLM reflection engine only when a model client is available; otherwise they fall back to deterministic reflection and record the fallback reason."
+    )
+    notes.append(
+        "- Skill rerank runs on the auxiliary model channel only when enabled and a model client is available; otherwise routing stays deterministic."
     )
     return notes
 
@@ -313,6 +344,8 @@ def summarize_group(results: list[EvalResult]) -> dict[str, float]:
     return {
         "pass_rate": (passed / total) if total else 0.0,
         "tool_calls": float(sum(int(result.metrics.get("tool_calls", 0)) for result in results)),
+        "skill_rerank_calls": float(sum(int(result.metrics.get("skill_rerank_calls", 0)) for result in results)),
+        "memory_llm_calls": float(sum(int(result.metrics.get("memory_llm_calls", 0)) for result in results)),
         "memory_written": float(sum(int(result.metrics.get("memory_written", 0)) for result in results)),
         "subagent_calls": float(sum(int(result.metrics.get("subagent_calls", 0)) for result in results)),
     }
@@ -332,12 +365,16 @@ def write_machine_reports(output_dir: Path, results: list[EvalResult]) -> None:
         "runtime_seconds",
         "tool_calls",
         "retries",
+        "skill_rerank_calls",
+        "memory_llm_calls",
         "compression_events",
         "subagent_calls",
         "memory_candidates",
         "memory_written",
         "memory_rejected",
         "memory_duplicates",
+        "memory_llm_filtered",
+        "memory_summary",
     ]
     with csv_path.open("w", encoding="utf-8", newline="") as handle:
         writer = DictWriter(handle, fieldnames=fieldnames)
@@ -355,12 +392,16 @@ def write_machine_reports(output_dir: Path, results: list[EvalResult]) -> None:
                     "runtime_seconds": result.runtime_seconds,
                     "tool_calls": metrics.get("tool_calls", 0),
                     "retries": metrics.get("retries", 0),
+                    "skill_rerank_calls": metrics.get("skill_rerank_calls", 0),
+                    "memory_llm_calls": metrics.get("memory_llm_calls", 0),
                     "compression_events": metrics.get("compression_events", 0),
                     "subagent_calls": metrics.get("subagent_calls", 0),
                     "memory_candidates": metrics.get("memory_candidates", 0),
                     "memory_written": metrics.get("memory_written", 0),
                     "memory_rejected": metrics.get("memory_rejected", 0),
                     "memory_duplicates": metrics.get("memory_duplicates", 0),
+                    "memory_llm_filtered": metrics.get("memory_llm_filtered", 0),
+                    "memory_summary": result.memory_summary or "",
                 }
             )
 

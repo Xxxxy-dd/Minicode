@@ -28,6 +28,15 @@ class MemoryCandidate:
     metadata: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class MemoryReflectionResult:
+    summary: str | None
+    candidates: list[MemoryCandidate]
+    filtered_count: int = 0
+    fallback_used: bool = False
+    fallback_reason: str | None = None
+
+
 class DeterministicReflectionEngine:
     """Rule-based memory candidate generator for the local Memory v1."""
 
@@ -79,6 +88,14 @@ class DeterministicReflectionEngine:
             )
         return candidates
 
+    def summarize(self, state: AgentState, candidates: list[MemoryCandidate]) -> str | None:
+        if not candidates:
+            return None
+        pieces = [candidate.content for candidate in candidates[:2]]
+        return truncate_summary(
+            f"Remember {len(candidates)} useful facts from '{state.user_goal}': " + "; ".join(pieces)
+        )
+
     def admit(self, candidate: MemoryCandidate) -> tuple[MemoryRecord | None, str]:
         if candidate.confidence < 0.5:
             return None, "confidence below admission threshold"
@@ -105,15 +122,17 @@ class LLMReflectionEngine:
         self.model_client = model_client
         self.fallback = fallback or DeterministicReflectionEngine()
 
-    def generate(self, state: AgentState, observations: list[dict[str, Any]]) -> list[MemoryCandidate]:
+    def generate(self, state: AgentState, observations: list[dict[str, Any]]) -> MemoryReflectionResult:
         messages = [
             ReflectionModelMessage(
                 role="system",
                 content=(
-                    "You generate durable memory candidates for MiniCode Agent. "
-                    "Return only JSON with a 'memories' array. Each memory must have: kind, content, "
-                    "confidence, tags, reason. Allowed kinds: project_memory, user_memory, "
-                    "procedure_memory, failure_memory. Do not include secrets or raw credentials."
+                    "You generate durable memory candidates and a short summary for MiniCode Agent. "
+                    "Return only JSON with fields: summary and memories. "
+                    "summary should be a short durable note for future runs. "
+                    "Each memory must have: keep, kind, content, confidence, tags, reason. "
+                    "Allowed kinds: project_memory, user_memory, procedure_memory, failure_memory. "
+                    "Set keep=false for noisy, duplicate, or low-value items. Do not include secrets or raw credentials."
                 ),
             ),
             ReflectionModelMessage(
@@ -128,6 +147,7 @@ class LLMReflectionEngine:
                         "decisions": state.task_state.decisions[-5:],
                         "metrics": state.metrics.model_dump(),
                         "observations": compact_observations(observations),
+                        "existing_history_summary": state.task_state.history_summary,
                     },
                     ensure_ascii=False,
                     indent=2,
@@ -135,13 +155,20 @@ class LLMReflectionEngine:
             ),
         ]
         response = self.model_client.complete(messages)
-        return parse_llm_memory_candidates(response.content, state.run_id)
+        return parse_llm_memory_response(response.content, state.run_id)
 
-    def generate_with_fallback(self, state: AgentState, observations: list[dict[str, Any]]) -> tuple[list[MemoryCandidate], bool, str | None]:
+    def generate_with_fallback(self, state: AgentState, observations: list[dict[str, Any]]) -> MemoryReflectionResult:
         try:
-            return self.generate(state, observations), False, None
+            return self.generate(state, observations)
         except Exception as exc:
-            return self.fallback.generate(state, observations), True, str(exc)
+            candidates = self.fallback.generate(state, observations)
+            return MemoryReflectionResult(
+                summary=self.fallback.summarize(state, candidates),
+                candidates=candidates,
+                filtered_count=0,
+                fallback_used=True,
+                fallback_reason=str(exc),
+            )
 
 
 def unique_strings(values) -> list[str]:
@@ -157,20 +184,34 @@ def unique_strings(values) -> list[str]:
 
 
 def parse_llm_memory_candidates(content: str, source_run_id: str) -> list[MemoryCandidate]:
+    return parse_llm_memory_response(content, source_run_id).candidates
+
+
+def parse_llm_memory_response(content: str, source_run_id: str) -> MemoryReflectionResult:
     try:
         payload = json.loads(content)
     except json.JSONDecodeError as exc:
         raise ValueError("LLM memory response must be valid JSON.") from exc
     if not isinstance(payload, dict):
         raise ValueError("LLM memory response must be a JSON object.")
+    summary = payload.get("summary")
+    if summary is not None and not isinstance(summary, str):
+        raise ValueError("LLM memory response field 'summary' must be a string or null.")
     memories = payload.get("memories", [])
     if not isinstance(memories, list):
         raise ValueError("LLM memory response field 'memories' must be a list.")
 
     candidates: list[MemoryCandidate] = []
+    filtered_count = 0
     for index, item in enumerate(memories):
         if not isinstance(item, dict):
             raise ValueError(f"LLM memory item {index} must be an object.")
+        keep = item.get("keep", True)
+        if not isinstance(keep, bool):
+            raise ValueError(f"LLM memory item {index} keep must be a boolean.")
+        if not keep:
+            filtered_count += 1
+            continue
         kind = parse_memory_kind(item.get("kind"), index)
         content_text = required_text(item.get("content"), f"memories[{index}].content")
         confidence = parse_confidence(item.get("confidence", 0.5), index)
@@ -187,7 +228,11 @@ def parse_llm_memory_candidates(content: str, source_run_id: str) -> list[Memory
                 metadata={"generator": "llm", "index": index},
             )
         )
-    return candidates
+    return MemoryReflectionResult(
+        summary=truncate_summary(summary) if summary else None,
+        candidates=candidates,
+        filtered_count=filtered_count,
+    )
 
 
 def parse_memory_kind(value: Any, index: int) -> MemoryKind:
@@ -234,3 +279,14 @@ def compact_observations(observations: list[dict[str, Any]], limit: int = 8, max
             }
         )
     return compacted
+
+
+def truncate_summary(value: str | None, max_chars: int = 240) -> str | None:
+    if value is None:
+        return None
+    text = " ".join(value.split())
+    if not text:
+        return None
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars] + "..."

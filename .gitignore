@@ -12,4 +12,7 @@ build/
 .env.*
 !.env.example
 .minicode/traces/
+.minicode/evals/
+.minicode/eval_workspaces/
+.minicode/memory/
 .minicode/memory.db

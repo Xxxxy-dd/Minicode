@@ -53,6 +53,27 @@ def test_cli_run_can_disable_model_from_env(tmp_path, monkeypatch) -> None:
     assert "Planner: rules" in result.output
 
 
+def test_cli_run_accepts_llm_polish_flags(tmp_path) -> None:
+    (tmp_path / "README.md").write_text("# Demo\n", encoding="utf-8")
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "run",
+            "inspect project",
+            "--workspace",
+            str(tmp_path),
+            "--no-model",
+            "--llm-rerank",
+            "--memory-reflection-mode",
+            "llm",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Final phase: done" in result.output
+
+
 def test_agent_loop_selects_test_writing_skill(tmp_path) -> None:
     (tmp_path / "README.md").write_text("# Demo\n", encoding="utf-8")
     runtime = RuntimeContext.create(tmp_path, run_id="agent_test")

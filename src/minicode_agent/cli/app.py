@@ -6,7 +6,7 @@ from rich.console import Console
 from rich.table import Table
 
 from minicode_agent.agent import AgentLoop
-from minicode_agent.config import MiniCodeConfig
+from minicode_agent.config import MiniCodeConfig, normalize_memory_reflection_mode
 from minicode_agent.harness import HarnessRunner, ablation_config_names, load_ablation_config_file, resolve_ablation_config, run_all_configs
 from minicode_agent.memory import MemoryKind, MemoryStore, default_memory_db_path
 from minicode_agent.models import OpenAICompatibleClient
@@ -43,8 +43,19 @@ def run(
     model: str | None = typer.Option(None, "--model", help="OpenAI-compatible model name to use."),
     model_base_url: str | None = typer.Option(None, "--model-base-url", help="OpenAI-compatible API base URL."),
     no_model: bool = typer.Option(False, "--no-model", help="Use the deterministic rule planner even if model env vars are set."),
+    llm_rerank: bool = typer.Option(False, "--llm-rerank", help="Use the auxiliary model to rerank skill candidates."),
+    memory_reflection_mode: str = typer.Option(
+        "deterministic",
+        "--memory-reflection-mode",
+        help="Memory reflection mode: deterministic or llm.",
+    ),
 ) -> None:
     """Start a single coding-agent run."""
+    try:
+        memory_reflection_mode = normalize_memory_reflection_mode(memory_reflection_mode)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
     config = MiniCodeConfig.from_env(workspace)
     if model or model_base_url:
         config = config.model_copy(
@@ -69,6 +80,9 @@ def run(
         max_steps=config.max_agent_steps,
         max_failed_tool_attempts=config.max_failed_tool_attempts,
         model_client=model_client,
+        aux_model_client=model_client,
+        enable_skill_rerank=llm_rerank,
+        memory_reflection_mode=memory_reflection_mode,
     ).run()
     console.print("[bold cyan]MiniCode Agent[/bold cyan]")
     console.print(f"run_id: {runtime.run_id}")
@@ -96,22 +110,27 @@ def eval(
 ) -> None:
     """Run the lightweight harness against a task set."""
     if list_configs:
-        table = Table(title="MiniCode Eval Configs")
+        table = Table(title="MiniCode Eval Configs", expand=False)
         table.add_column("Name", no_wrap=True)
-        table.add_column("Skills")
-        table.add_column("Memory")
-        table.add_column("Compression")
-        table.add_column("Subagents")
-        table.add_column("Memory Mode")
+        table.add_column("Features")
+        table.add_column("Memory Mode", no_wrap=True)
         table.add_column("Description")
         for name in ablation_config_names():
             preset = resolve_ablation_config(name)
+            features = []
+            if preset.enable_skills:
+                features.append("skills")
+            if preset.enable_skill_rerank:
+                features.append("rerank")
+            if preset.enable_memory:
+                features.append("memory")
+            if preset.enable_compression:
+                features.append("compression")
+            if preset.enable_subagents:
+                features.append("subagents")
             table.add_row(
                 preset.name,
-                str(preset.enable_skills),
-                str(preset.enable_memory),
-                str(preset.enable_compression),
-                str(preset.enable_subagents),
+                ", ".join(features) or "none",
                 preset.memory_reflection_mode,
                 preset.description,
             )
@@ -129,10 +148,10 @@ def eval(
     table = Table(title="MiniCode Eval")
     table.add_column("Config", no_wrap=True)
     table.add_column("Task", no_wrap=True)
-    table.add_column("Expected")
-    table.add_column("Passed")
-    table.add_column("Runtime")
-    table.add_column("Tools")
+    table.add_column("Expected", no_wrap=True)
+    table.add_column("Passed", no_wrap=True)
+    table.add_column("Runtime", no_wrap=True)
+    table.add_column("Tools", no_wrap=True)
     for result in results:
         table.add_row(
             result.config,

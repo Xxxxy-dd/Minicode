@@ -1,10 +1,11 @@
 from dataclasses import dataclass
 from typing import Any
 
+from minicode_agent.config import normalize_memory_reflection_mode
 from minicode_agent.context import TaskStateCompressor
 from minicode_agent.core.state import AgentPhase, AgentState, RunMetrics, TaskState
 from minicode_agent.agent.planner import ModelDecision, ModelDrivenPlanner, PlannedAction, RuleBasedPlanner
-from minicode_agent.memory import DeterministicReflectionEngine, LLMReflectionEngine, MemoryRecord
+from minicode_agent.memory import DeterministicReflectionEngine, LLMReflectionEngine, MemoryRecord, MemoryReflectionResult
 from minicode_agent.models import ModelClient
 from minicode_agent.runtime import RuntimeContext
 from minicode_agent.skills import SkillDefinition, SkillError, SkillRegistry, SkillRouter
@@ -26,7 +27,7 @@ class AgentRunResult:
 
 
 class AgentLoop:
-    """Minimal rule-driven agent loop for day 6."""
+    """MiniCode V1 coding-agent loop with tools, skills, memory, compression, and subagents."""
 
     def __init__(
         self,
@@ -35,7 +36,9 @@ class AgentLoop:
         max_steps: int = 30,
         max_failed_tool_attempts: int = 2,
         model_client: ModelClient | None = None,
+        aux_model_client: ModelClient | None = None,
         enable_skills: bool = True,
+        enable_skill_rerank: bool = False,
         enable_memory: bool = True,
         enable_compression: bool = True,
         enable_subagents: bool = True,
@@ -54,10 +57,12 @@ class AgentLoop:
         )
         self.transcript: list[dict[str, Any]] = []
         self.enable_skills = enable_skills
+        self.enable_skill_rerank = enable_skill_rerank
         self.enable_memory = enable_memory
         self.enable_compression = enable_compression
         self.enable_subagents = enable_subagents
-        self.memory_reflection_mode = memory_reflection_mode
+        self.memory_reflection_mode = normalize_memory_reflection_mode(memory_reflection_mode)
+        self.aux_model_client = aux_model_client or model_client
         registry = create_default_registry(include_subagents=enable_subagents)
         self.executor = ToolExecutor(
             registry,
@@ -75,10 +80,16 @@ class AgentLoop:
         self.max_failed_tool_attempts = max_failed_tool_attempts
         self.loop_turns = 0
         self.skill_registry = SkillRegistry()
-        self.skill_router = SkillRouter(self.skill_registry)
+        self.skill_router = SkillRouter(
+            self.skill_registry,
+            model_client=self.aux_model_client,
+            enable_llm_rerank=enable_skill_rerank,
+        )
         self.active_skills: list[SkillDefinition] = []
         self.reflection_engine = DeterministicReflectionEngine()
-        self.llm_reflection_engine = LLMReflectionEngine(model_client, self.reflection_engine) if model_client else None
+        self.llm_reflection_engine = (
+            LLMReflectionEngine(self.aux_model_client, self.reflection_engine) if self.aux_model_client else None
+        )
         self.active_memories: list[MemoryRecord] = []
         self.compressor = TaskStateCompressor()
 
@@ -118,6 +129,18 @@ class AgentLoop:
             self.state.skill_route_reasons = route_result.reasons
             if self.state.selected_skills:
                 self._load_active_skills()
+            if route_result.rerank_used:
+                self.state.metrics.skill_rerank_calls += 1
+                if route_result.rerank_fallback:
+                    self.state.metrics.skill_rerank_fallbacks += 1
+                self._observe(
+                    "skill_reranked",
+                    {
+                        "selected": self.state.selected_skills,
+                        "fallback": route_result.rerank_fallback,
+                        "reason": route_result.rerank_reason,
+                    },
+                )
         else:
             self.state.selected_skills = []
             self.state.skill_candidates = []
@@ -128,6 +151,9 @@ class AgentLoop:
                 "skills": self.state.selected_skills,
                 "candidates": self.state.skill_candidates,
                 "reasons": self.state.skill_route_reasons,
+                "rerank_used": route_result.rerank_used if self.enable_skills else False,
+                "rerank_fallback": route_result.rerank_fallback if self.enable_skills else False,
+                "rerank_reason": route_result.rerank_reason if self.enable_skills else None,
             },
         )
 
@@ -315,31 +341,39 @@ class AgentLoop:
 
     def _reflect(self) -> None:
         self.state.task_state.decisions.append("Keep the first loop minimal and traceable.")
-        if not self.enable_memory:
+        if not self.enable_memory or self.memory_reflection_mode == "off":
             self._observe("memory_reflected", self._memory_stats(0, 0, 0, mode="off"))
             return
-        llm_fallback = False
-        llm_error = None
+        reflection: MemoryReflectionResult
         if self.memory_reflection_mode == "llm" and self.llm_reflection_engine:
-            candidates, llm_fallback, llm_error = self.llm_reflection_engine.generate_with_fallback(self.state, self.transcript)
+            reflection = self.llm_reflection_engine.generate_with_fallback(self.state, self.transcript)
         else:
-            if self.memory_reflection_mode == "llm":
-                llm_fallback = True
-                llm_error = "model client unavailable"
             candidates = self.reflection_engine.generate(self.state, self.transcript)
+            reflection = MemoryReflectionResult(
+                summary=self.reflection_engine.summarize(self.state, candidates),
+                candidates=candidates,
+                filtered_count=0,
+                fallback_used=self.memory_reflection_mode == "llm",
+                fallback_reason="model client unavailable" if self.memory_reflection_mode == "llm" else None,
+            )
         if self.memory_reflection_mode == "llm":
+            self.state.metrics.memory_llm_calls += 1
+            if reflection.fallback_used:
+                self.state.metrics.memory_llm_fallbacks += 1
             self._observe(
                 "memory_llm_requested",
                 {
-                    "fallback": llm_fallback,
-                    "reason": llm_error,
+                    "fallback": reflection.fallback_used,
+                    "reason": reflection.fallback_reason,
+                    "filtered": reflection.filtered_count,
+                    "summary": reflection.summary,
                 },
             )
         written = 0
         skipped = 0
         rejected_reasons: dict[str, int] = {}
         duplicates = 0
-        for candidate in candidates:
+        for candidate in reflection.candidates:
             record, admission_reason = self.reflection_engine.admit(candidate)
             if record is None:
                 skipped += 1
@@ -376,7 +410,21 @@ class AgentLoop:
             else:
                 duplicates += 1
                 skipped += 1
-        self._observe("memory_reflected", self._memory_stats(len(candidates), written, skipped, duplicates, rejected_reasons))
+        self.state.metrics.memory_llm_filtered += reflection.filtered_count
+        if reflection.summary:
+            self.state.task_state.history_summary = reflection.summary
+        self._observe(
+            "memory_reflected",
+            self._memory_stats(
+                len(reflection.candidates),
+                written,
+                skipped,
+                duplicates,
+                rejected_reasons,
+                reflection.filtered_count,
+                reflection.summary,
+            ),
+        )
 
     def _plan_action(self, known_files: list[str]) -> PlannedAction | None:
         self.state.task_state.next_actions = self.rule_planner.plan_steps(self.state.user_goal)
@@ -531,6 +579,7 @@ class AgentLoop:
     def _feature_flags(self) -> dict[str, bool | str]:
         return {
             "skills": self.enable_skills,
+            "skill_rerank": self.enable_skill_rerank,
             "memory": self.enable_memory,
             "compression": self.enable_compression,
             "subagents": self.enable_subagents,
@@ -544,6 +593,8 @@ class AgentLoop:
         skipped: int,
         duplicates: int = 0,
         rejected_reasons: dict[str, int] | None = None,
+        filtered: int = 0,
+        summary: str | None = None,
         mode: str | None = None,
     ) -> dict[str, Any]:
         self.state.metrics.memory_candidates += candidates
@@ -556,6 +607,8 @@ class AgentLoop:
             "skipped": skipped,
             "duplicates": duplicates,
             "rejected_reasons": rejected_reasons or {},
+            "filtered": filtered,
+            "summary": summary,
             "mode": mode or self.memory_reflection_mode,
         }
 

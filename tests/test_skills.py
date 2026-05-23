@@ -4,6 +4,7 @@ from typer.testing import CliRunner
 
 from minicode_agent.cli.app import app
 from minicode_agent.skills import SkillError, SkillRegistry, SkillRouter
+from minicode_agent.models import ModelResponse
 from minicode_agent.skills.registry import parse_skill_metadata
 
 
@@ -124,3 +125,25 @@ def test_skill_router_does_not_force_unrelated_skill() -> None:
 
     assert result.selected == []
     assert result.candidates == []
+
+
+def test_skill_router_can_llm_rerank_top_candidates() -> None:
+    class RerankModel:
+        def complete(self, messages):
+            return ModelResponse(
+                """
+                {
+                  "selected_skills": ["code-review", "debugging"],
+                  "reason": "Review comes first for a diff-focused task."
+                }
+                """
+            )
+
+    router = SkillRouter(model_client=RerankModel(), enable_llm_rerank=True)
+
+    result = router.route("review this diff for bugs")
+
+    assert result.rerank_used
+    assert not result.rerank_fallback
+    assert result.selected[0] == "code-review"
+    assert result.rerank_reason

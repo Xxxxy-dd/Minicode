@@ -220,6 +220,42 @@ def test_parse_llm_memory_candidates_accepts_structured_json() -> None:
     assert "llm_reflection" in candidates[0].tags
 
 
+def test_parse_llm_memory_response_summarizes_and_filters() -> None:
+    from minicode_agent.memory import parse_llm_memory_response
+
+    result = parse_llm_memory_response(
+        """
+        {
+          "summary": "Keep the pytest workflow and ignore noise.",
+          "memories": [
+            {
+              "keep": true,
+              "kind": "procedure_memory",
+              "content": "Run python -m pytest tests before finishing.",
+              "confidence": 0.8,
+              "tags": ["tests"],
+              "reason": "Observed successful validation."
+            },
+            {
+              "keep": false,
+              "kind": "failure_memory",
+              "content": "The output included a temporary debug note.",
+              "confidence": 0.6,
+              "tags": ["noise"],
+              "reason": "LLM filtered this noise."
+            }
+          ]
+        }
+        """,
+        "run_1",
+    )
+
+    assert result.summary == "Keep the pytest workflow and ignore noise."
+    assert len(result.candidates) == 1
+    assert result.filtered_count == 1
+    assert result.candidates[0].kind == MemoryKind.PROCEDURE
+
+
 def test_llm_reflection_engine_uses_model_client(tmp_path) -> None:
     class MemoryModel:
         def __init__(self) -> None:
@@ -247,8 +283,10 @@ def test_llm_reflection_engine_uses_model_client(tmp_path) -> None:
                 """,
                 """
                 {
+                  "summary": "Remember the README path and the demo docs.",
                   "memories": [
                     {
+                      "keep": true,
                       "kind": "project_memory",
                       "content": "README.md explains the demo project.",
                       "confidence": 0.7,
@@ -277,8 +315,10 @@ def test_llm_reflection_engine_uses_model_client(tmp_path) -> None:
 
     assert result.state.current_phase.value == "done"
     assert runtime.memory_store.list()[0].content == "README.md explains the demo project."
+    assert result.state.task_state.history_summary
     assert len(model.messages) >= 2
     events = runtime.trace_store.list_events("agent_llm_memory_test")
     memory_event = next(event for event in events if event.event_type == "memory_reflected")
     assert memory_event.payload["mode"] == "llm"
     assert memory_event.payload["written"] == 1
+    assert memory_event.payload["summary"]

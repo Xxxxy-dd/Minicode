@@ -64,4 +64,5 @@ class EvalResult(BaseModel):
     success_results: list[SuccessResult] = Field(default_factory=list)
     metrics: dict = Field(default_factory=dict)
     config_features: dict = Field(default_factory=dict)
+    memory_summary: str | None = None
     trace_path: str

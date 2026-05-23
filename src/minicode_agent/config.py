@@ -4,6 +4,17 @@ import os
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
+MEMORY_REFLECTION_MODES = frozenset({"off", "deterministic", "llm"})
+
+
+def normalize_memory_reflection_mode(value: str) -> str:
+    normalized = value.strip().lower()
+    if normalized not in MEMORY_REFLECTION_MODES:
+        known = ", ".join(sorted(MEMORY_REFLECTION_MODES))
+        raise ValueError(f"memory_reflection_mode must be one of: {known}")
+    return normalized
+
+
 class MiniCodeConfig(BaseModel):
     """Runtime configuration for a MiniCode Agent session."""
 

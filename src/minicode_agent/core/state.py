@@ -35,6 +35,8 @@ class RunMetrics(BaseModel):
     retries: int = 0
     permission_blocks: int = 0
     subagent_calls: int = 0
+    skill_rerank_calls: int = 0
+    skill_rerank_fallbacks: int = 0
     input_tokens: int = 0
     output_tokens: int = 0
     compression_events: int = 0
@@ -45,6 +47,9 @@ class RunMetrics(BaseModel):
     memory_written: int = 0
     memory_rejected: int = 0
     memory_duplicates: int = 0
+    memory_llm_calls: int = 0
+    memory_llm_fallbacks: int = 0
+    memory_llm_filtered: int = 0
 
 
 class AgentState(BaseModel):

@@ -21,17 +21,20 @@ def test_ablation_config_presets_define_expected_feature_flags() -> None:
 
     assert baseline.agent_kwargs() == {
         "enable_skills": False,
+        "enable_skill_rerank": False,
         "enable_memory": False,
         "enable_compression": False,
         "enable_subagents": False,
         "memory_reflection_mode": "off",
     }
     assert full.enable_skills
+    assert full.enable_skill_rerank
     assert full.enable_memory
     assert full.enable_compression
     assert full.enable_subagents
     assert full.memory_reflection_mode == "deterministic"
     assert full_llm.uses_llm_memory
+    assert full_llm.enable_skill_rerank
     assert "baseline" in ablation_config_names()
 
 
@@ -145,6 +148,28 @@ def test_load_custom_ablation_config_file(tmp_path) -> None:
 
     assert config.name == "custom_memory"
     assert config.enable_memory
+
+
+def test_load_custom_ablation_config_rejects_invalid_memory_mode(tmp_path) -> None:
+    path = tmp_path / "custom.json"
+    path.write_text(
+        json.dumps(
+            {
+                "name": "custom_memory",
+                "description": "Custom config.",
+                "enable_memory": True,
+                "memory_reflection_mode": "maybe",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    try:
+        load_ablation_config_file(path)
+    except ValueError as exc:
+        assert "memory_reflection_mode" in str(exc)
+    else:
+        raise AssertionError("expected invalid memory_reflection_mode to be rejected")
 
 
 def test_cli_eval_lists_configs(tmp_path) -> None:

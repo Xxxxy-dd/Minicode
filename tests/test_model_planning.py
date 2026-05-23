@@ -68,14 +68,146 @@ def test_parse_model_plan_extracts_json_from_explained_response() -> None:
     assert plan.action.tool == "read_file"
 
 
+def test_parse_model_plan_defaults_empty_next_actions_on_stop() -> None:
+    plan = parse_model_plan(
+        """
+        {
+          "summary": "你好！",
+          "selected_skill": null,
+          "next_actions": [],
+          "stop": true,
+          "final_answer": null,
+          "action": null
+        }
+        """
+    )
+
+    assert plan.stop
+    assert plan.final_answer == "你好！"
+    assert plan.next_actions == ["Report the final answer."]
+
+
 def test_parse_model_plan_rejects_missing_action() -> None:
     with pytest.raises(ValueError, match="action"):
-        parse_model_plan('{"summary":"x","next_actions":["read"]}')
+        parse_model_plan('{"summary":"x","next_actions":["Read README.md."]}')
+
+
+def test_parse_model_plan_treats_missing_action_with_summary_as_direct_answer() -> None:
+    plan = parse_model_plan(
+        """
+        {
+          "summary": "hello",
+          "selected_skill": null,
+          "next_actions": [],
+          "stop": false,
+          "final_answer": null,
+          "action": null
+        }
+        """
+    )
+
+    assert plan.stop
+    assert plan.final_answer == "hello"
+    assert plan.action is None
+
+
+def test_parse_model_plan_allows_report_only_next_action_without_tool() -> None:
+    plan = parse_model_plan(
+        """
+        {
+          "summary": "hello",
+          "selected_skill": null,
+          "next_actions": ["Respond to the user."],
+          "stop": false,
+          "final_answer": null,
+          "action": null
+        }
+        """
+    )
+
+    assert plan.stop
+    assert plan.final_answer == "hello"
+
+
+@pytest.mark.parametrize(
+    ("summary", "next_action"),
+    [
+        ("I am MiniCode Agent, a local coding agent.", "Describe your identity."),
+        ("I can inspect, modify, test, review, and document code.", "Describe your capabilities."),
+        ("I can help with code tasks and answer project questions.", "Answer what you can help with."),
+        ("我是 MiniCode Agent，可以协助代码开发、测试、审查和文档整理。", "介绍你能做什么。"),
+    ],
+)
+def test_parse_model_plan_allows_direct_answer_intents_without_tool(summary: str, next_action: str) -> None:
+    plan = parse_model_plan(
+        f"""
+        {{
+          "summary": {summary!r},
+          "selected_skill": null,
+          "next_actions": [{next_action!r}],
+          "stop": false,
+          "final_answer": null,
+          "action": null
+        }}
+        """.replace("'", '"')
+    )
+
+    assert plan.stop
+    assert plan.final_answer == summary
+    assert plan.action is None
+
+
+@pytest.mark.parametrize(
+    "next_action",
+    [
+        "Read README.md.",
+        "Read the file src/main.py.",
+        "Run tests.",
+        "Search code for parser.",
+        "Search for parser.",
+        "Inspect project files.",
+        "Edit file src/main.py.",
+        "调用工具读取 README。",
+        "搜索项目中的 parser。",
+        "检查项目结构。",
+    ],
+)
+def test_parse_model_plan_rejects_tool_intent_without_action(next_action: str) -> None:
+    with pytest.raises(ValueError, match="action"):
+        parse_model_plan(
+            f"""
+            {{
+              "summary": "I need a tool.",
+              "selected_skill": null,
+              "next_actions": [{next_action!r}],
+              "stop": false,
+              "final_answer": null,
+              "action": null
+            }}
+            """.replace("'", '"')
+        )
+
+
+def test_parse_model_plan_still_rejects_invalid_action_object() -> None:
+    with pytest.raises(ValueError, match="tool"):
+        parse_model_plan(
+            """
+            {
+              "summary": "I will use a tool.",
+              "selected_skill": null,
+              "next_actions": ["Read README."],
+              "stop": false,
+              "final_answer": null,
+              "action": {"arguments": {"path": "README.md"}}
+            }
+            """
+        )
 
 
 def test_parse_model_plan_requires_final_answer_when_stopping() -> None:
-    with pytest.raises(ValueError, match="final_answer"):
-        parse_model_plan('{"summary":"x","next_actions":["report"],"stop":true,"final_answer":null,"action":null}')
+    plan = parse_model_plan('{"summary":"x","next_actions":["report"],"stop":true,"final_answer":null,"action":null}')
+
+    assert plan.final_answer == "x"
 
 
 def test_build_planning_prompt_includes_tools_and_limits_files() -> None:
@@ -89,13 +221,23 @@ def test_build_planning_prompt_includes_tools_and_limits_files() -> None:
     )
 
     assert [message.role for message in messages] == ["system", "user"]
+    assert "You are MiniCode Agent" in messages[0].content
+    assert "tools, skills, memory, trace, subagents, and evaluation harness" in messages[0].content
+    assert "First classify the user's request as direct_answer or coding_task" in messages[0].content
+    assert "tailor the answer to the exact intent" in messages[0].content
     assert "Return only JSON" in messages[0].content
+    assert "capability/help questions" in messages[0].content
+    assert "permission is ask" in messages[0].content
     assert '"recent_observations"' in messages[1].content
     assert '"active_skills"' in messages[1].content
     assert "Debugging" in messages[1].content
     assert '"aliases"' in messages[1].content
     assert "失败" in messages[1].content
     assert '"available_tools"' in messages[1].content
+    assert '"direct_answer_policy"' in messages[1].content
+    assert '"language_preference"' in messages[1].content
+    assert '"usage_help"' in messages[1].content
+    assert '"conceptual"' in messages[1].content
     assert '"risk_level"' in messages[1].content
     assert '"permission"' in messages[1].content
     assert "file_49.py" in messages[1].content
@@ -157,6 +299,40 @@ def test_agent_loop_treats_direct_model_answer_as_stop(tmp_path) -> None:
 
     assert result.state.current_phase == AgentPhase.DONE
     assert "我是 MiniCode Agent。" in result.state.task_state.decisions
+
+
+def test_agent_loop_stops_after_approval_required_tool(tmp_path) -> None:
+    runtime = RuntimeContext.create(tmp_path, run_id="agent_model_approval_required_test")
+    model = MockModelClient(
+        [
+            """
+            {
+              "summary": "Try to run a command.",
+              "selected_skill": null,
+              "next_actions": ["Run a command."],
+              "stop": false,
+              "final_answer": null,
+              "action": {"tool": "run_shell", "arguments": {"command": "cmd /c echo hello"}}
+            }
+            """,
+            """
+            {
+              "summary": "This second response should not be used.",
+              "selected_skill": null,
+              "next_actions": [],
+              "stop": false,
+              "final_answer": null,
+              "action": null
+            }
+            """,
+        ]
+    )
+
+    result = AgentLoop(runtime, "你好", model_client=model).run()
+
+    assert result.state.current_phase == AgentPhase.FAILED
+    assert "approval" in result.state.task_state.failed_attempts[-1]
+    assert len(model.messages) == 1
 
 
 def test_agent_loop_records_model_planning_failure(tmp_path) -> None:

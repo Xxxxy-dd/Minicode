@@ -271,6 +271,11 @@ class AgentLoop:
             self._observe("agent_observed", observation)
             self._maybe_compress_context()
 
+            if action_result["metadata"].get("permission") == "ask":
+                self.failure_reason = str(action_result["result"])
+                self.state.task_state.failed_attempts.append(self.failure_reason)
+                return self._finish(False)
+
             if action_result["ok"]:
                 failed_tool_attempts = 0
                 self.failure_reason = None

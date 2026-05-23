@@ -4,7 +4,7 @@ from rich.console import Console
 from typer.testing import CliRunner
 
 from minicode_agent.cli.app import app
-from minicode_agent.cli.live_ui import ChatSession, ChatTurn, format_stream_event, render_bottom_panel, render_conversation_area, render_top_panel, summarize_turn
+from minicode_agent.cli.live_ui import ChatSession, ChatTurn, format_stream_event, render_bottom_panel, render_conversation_area, render_top_panel, summarize_turn, wrap_text
 from minicode_agent.core.state import AgentPhase, AgentState, TaskState
 
 

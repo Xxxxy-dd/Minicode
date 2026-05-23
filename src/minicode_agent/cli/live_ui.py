@@ -166,7 +166,7 @@ def run_turn(session: ChatSession, task: str, config: MiniCodeConfig, model_clie
             memory_reflection_mode=session.memory_reflection_mode,
             event_callback=stream.handle,
         ).run()
-    summary = result.state.task_state.history_summary or summarize_turn(result)
+    summary = summarize_turn(result) or result.state.task_state.history_summary or "No summary available."
     failure_reason = result.state.task_state.failed_attempts[-1] if result.state.current_phase.value == "failed" and result.state.task_state.failed_attempts else None
     return ChatTurn(
         prompt=task,
@@ -313,7 +313,7 @@ def render_conversation_area(session: ChatSession) -> RenderableType:
 def render_turn_dialogue(turn: ChatTurn) -> list[RenderableType]:
     return [
         render_rule("USER", "#f08f5a"),
-        Text(turn.prompt, style="#efe8dd"),
+        wrap_text(turn.prompt, "#efe8dd"),
         render_rule("", "#3d3d3d"),
         render_rule("MINICODE", "#9ad8ff"),
         render_turn_summary(turn),
@@ -350,6 +350,17 @@ def render_turn_summary(turn: ChatTurn) -> Text:
     return text
 
 
+def wrap_text(value: str, style: str, width: int = 76) -> Text:
+    text = Text(style=style)
+    for index, line in enumerate(value.splitlines() or [""]):
+        if index:
+            text.append("\n")
+        text.append(line)
+    text.no_wrap = False
+    text.overflow = "fold"
+    return text
+
+
 def render_bottom_panel(session: ChatSession) -> Panel:
     prompt_hint = Text()
     prompt_hint.append("Enter a task, or ", style="#cfc7b9")
@@ -373,16 +384,6 @@ def input_bar() -> str:
 
     console = Console()
     rule = horizontal_rule(console.size.width)
-    if console.is_terminal:
-        console.print(rule)
-        console.print(Text("> ", style="#f08f5a"), end="")
-        console.file.write("\n")
-        console.file.flush()
-        console.print(rule)
-        console.file.write("\x1b[2A\r\x1b[2C")
-        console.file.flush()
-        return read_tty_line(console)
-
     console.print(rule)
     value = console.input("> ").strip()
     console.print(rule)
@@ -405,13 +406,9 @@ def render_avatar() -> Group:
 
 
 def summarize_turn(result) -> str:
-    for event in reversed(result.transcript):
-        if event.get("event") == "agent_planned":
-            payload = event.get("payload", {})
-            if payload.get("stop") and payload.get("description") == "Model returned a direct answer.":
-                for decision in result.state.task_state.decisions:
-                    if decision != "Keep the first loop minimal and traceable.":
-                        return str(decision)[:240]
+    for decision in result.state.task_state.decisions:
+        if decision != "Keep the first loop minimal and traceable.":
+            return str(decision)[:240]
     for event in reversed(result.transcript):
         payload = event.get("payload", {})
         if event.get("event") == "agent_observed":
@@ -429,25 +426,3 @@ def horizontal_rule(width: int) -> Text:
     rule_width = max(20, width - 1)
     return Text("─" * rule_width, style="#8f8b84")
 
-
-def read_tty_line(console) -> str:
-    import msvcrt
-
-    buffer: list[str] = []
-    while True:
-        char = msvcrt.getwch()
-        if char in {"\r", "\n"}:
-            console.file.write("\n")
-            console.file.flush()
-            return "".join(buffer).strip()
-        if char == "\x03":
-            raise KeyboardInterrupt
-        if char in {"\b", "\x7f"}:
-            if buffer:
-                buffer.pop()
-                console.file.write("\b \b")
-                console.file.flush()
-            continue
-        buffer.append(char)
-        console.file.write(char)
-        console.file.flush()

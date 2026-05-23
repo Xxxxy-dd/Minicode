@@ -8,7 +8,7 @@ from minicode_agent.agent.planner import ModelDecision, ModelDrivenPlanner, Plan
 from minicode_agent.memory import DeterministicReflectionEngine, LLMReflectionEngine, MemoryRecord, MemoryReflectionResult
 from minicode_agent.models import ModelClient
 from minicode_agent.runtime import RuntimeContext
-from minicode_agent.skills import SkillDefinition, SkillError, SkillRegistry, SkillRouter
+from minicode_agent.skills import SkillDefinition, SkillError, SkillRouter, default_skill_registry
 from minicode_agent.tools.executor import ToolExecutor
 from minicode_agent.tools.registry import create_default_registry
 from minicode_agent.tools.types import ToolContext, ToolObservation
@@ -79,7 +79,7 @@ class AgentLoop:
         self.observations: list[dict[str, Any]] = []
         self.max_failed_tool_attempts = max_failed_tool_attempts
         self.loop_turns = 0
-        self.skill_registry = SkillRegistry()
+        self.skill_registry = default_skill_registry(runtime.workspace)
         self.skill_router = SkillRouter(
             self.skill_registry,
             model_client=self.aux_model_client,

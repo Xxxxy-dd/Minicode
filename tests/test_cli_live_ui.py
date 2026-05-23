@@ -39,7 +39,7 @@ def test_claude_like_panels_render_key_sections() -> None:
     console = Console(record=True, width=120)
     console.print(render_top_panel(session))
     console.print(render_conversation_area(session))
-    console.print(render_bottom_panel(session, 120))
+    console.print(render_bottom_panel(session))
     text = console.export_text()
 
     assert "MiniCode Agent" in text
@@ -59,7 +59,6 @@ def test_chat_preview_renders_a_full_screen() -> None:
     assert "Command" in result.output
     assert "No recent activity" in result.output
     assert "No messages yet" in result.output
-    assert "─" in result.output
 
 
 def test_help_command_shows_a_system_notice() -> None:
@@ -68,3 +67,11 @@ def test_help_command_shows_a_system_notice() -> None:
     assert result.exit_code == 0, result.output
     assert "SYSTEM" in result.output
     assert "Shortcuts:" in result.output
+
+
+def test_interactive_input_bar_has_focus_rules() -> None:
+    result = CliRunner().invoke(app, ["chat", "--workspace", ".", "--no-model"], input="/exit\n")
+
+    assert result.exit_code == 0, result.output
+    assert "> " in result.output
+    assert "? for shortcuts" not in result.output

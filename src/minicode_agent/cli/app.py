@@ -10,7 +10,7 @@ from minicode_agent.config import MiniCodeConfig, normalize_memory_reflection_mo
 from minicode_agent.harness import HarnessRunner, ablation_config_names, load_ablation_config_file, resolve_ablation_config, run_all_configs
 from minicode_agent.memory import MemoryKind, MemoryStore, default_memory_db_path
 from minicode_agent.models import OpenAICompatibleClient
-from minicode_agent.skills import SkillError, SkillRegistry, SkillRouter
+from minicode_agent.skills import SkillError, SkillRegistry, SkillRouter, default_skill_registry
 from minicode_agent.trace import TraceStore, default_trace_db_path
 from minicode_agent.runtime import RuntimeContext
 from minicode_agent.tools.executor import ToolExecutor
@@ -267,9 +267,11 @@ def list_tools() -> None:
 
 
 @skills_app.command("list")
-def list_skills() -> None:
-    """List built-in skills."""
-    registry = SkillRegistry()
+def list_skills(
+    workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w", help="Workspace directory for local .minicode skills."),
+) -> None:
+    """List available skills."""
+    registry = default_skill_registry(workspace)
     table = Table(title="MiniCode Skills")
     table.add_column("Name")
     table.add_column("Tags")
@@ -284,9 +286,12 @@ def list_skills() -> None:
 
 
 @skills_app.command("show")
-def show_skill(name: str = typer.Argument(..., help="Skill name to show.")) -> None:
+def show_skill(
+    name: str = typer.Argument(..., help="Skill name to show."),
+    workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w", help="Workspace directory for local .minicode skills."),
+) -> None:
     """Show a skill's metadata and content."""
-    registry = SkillRegistry()
+    registry = default_skill_registry(workspace)
     try:
         skill = registry.get(name)
     except SkillError as exc:
@@ -301,9 +306,12 @@ def show_skill(name: str = typer.Argument(..., help="Skill name to show.")) -> N
 
 
 @skills_app.command("route")
-def route_skill(task: str = typer.Argument(..., help="Task text to route.")) -> None:
+def route_skill(
+    task: str = typer.Argument(..., help="Task text to route."),
+    workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w", help="Workspace directory for local .minicode skills."),
+) -> None:
     """Show deterministic skill routing for a task."""
-    result = SkillRouter().route(task)
+    result = SkillRouter(default_skill_registry(workspace)).route(task)
     table = Table(title="MiniCode Skill Route")
     table.add_column("Selected")
     table.add_column("Skill")

@@ -7,11 +7,18 @@ This directory contains lightweight benchmark assets for the MiniCode harness.
 - `tasks/`: JSON benchmark tasks loaded by `minicode eval`.
 - `repos/mini_py/`: a tiny Python project used by most tasks.
 - `repos/mini_py_buggy/`: a failing variant used by repair tasks.
+- `skills/code-style/`: a minimal external skill loaded through `MINICODE_SKILL_PATHS`.
 
 ## Run
 
 ```bash
 minicode eval examples/tasks
+```
+
+To try the external skill example:
+
+```bash
+MINICODE_SKILL_PATHS=examples/skills minicode skills route "cleanup this module" --workspace .
 ```
 
 Each task points at a source workspace and provides a prompt. Harness copies the

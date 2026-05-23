@@ -38,6 +38,7 @@ V1 is feature-complete after the Day 17 polishing pass:
 - configurable retry limit for failed tool calls
 - LLM skill rerank for top skill candidates
 - skill metadata and markdown loader
+- external skills from `MINICODE_SKILL_PATHS` and workspace `.minicode/skills`
 - built-in skills: `debugging`, `test-writing`, `code-review`
 - `minicode skills list` and `minicode skills show`
 - `minicode skills route` for route debugging
@@ -100,8 +101,8 @@ minicode chat --no-model --preview
 minicode chat "inspect project" --no-model
 minicode run "inspect project" --model gpt-4.1-mini --llm-rerank --memory-reflection-mode llm
 minicode run "review current diff"
-minicode skills list
-minicode skills show debugging
+minicode skills list --workspace .
+minicode skills show debugging --workspace .
 minicode skills route "审查 diff"
 minicode memory add "Use python -m pytest tests for validation" --kind project_memory --confidence 0.9
 minicode memory list
@@ -124,6 +125,22 @@ minicode eval examples/tasks --list-configs
 minicode eval examples/tasks --config-file custom_ablation.json
 ```
 
+## V1 Local Startup
+
+For a deterministic local demo without a model:
+
+```bash
+minicode chat --workspace . --no-model
+minicode run "inspect project" --workspace . --no-model
+```
+
+For the full model-backed V1 path:
+
+```bash
+minicode chat --workspace . --llm-rerank --memory-reflection-mode llm
+minicode run "review current diff" --workspace . --llm-rerank --memory-reflection-mode llm
+```
+
 Model-backed runs use OpenAI-compatible chat completions. Prefer MiniCode-specific
 environment variables:
 
@@ -134,6 +151,57 @@ MINICODE_MODEL_BASE_URL=https://api.openai.com/v1
 ```
 
 `OPENAI_MODEL` and `OPENAI_API_KEY` are also accepted as compatibility fallbacks.
+See `.env.example` for the full template.
+
+## External Skills
+
+MiniCode loads skills from three places. Later sources override earlier skills
+with the same name:
+
+1. Built-in skills under `src/minicode_agent/skills/builtin`
+2. Extra roots listed in `MINICODE_SKILL_PATHS`
+3. Workspace skills under `.minicode/skills`
+
+A skill directory contains `metadata.yaml` and `SKILL.md`:
+
+```text
+.minicode/
+  skills/
+    code-style/
+      metadata.yaml
+      SKILL.md
+```
+
+`examples/skills/code-style/` is a minimal external skill example. To try it:
+
+```bash
+MINICODE_SKILL_PATHS=examples/skills minicode skills list --workspace .
+MINICODE_SKILL_PATHS=examples/skills minicode skills route "cleanup this module" --workspace .
+```
+
+On Windows PowerShell:
+
+```powershell
+$env:MINICODE_SKILL_PATHS="examples/skills"
+minicode skills list --workspace .
+```
+
+## V1 Verification
+
+Recommended release checks:
+
+```bash
+python -m pytest -q
+minicode chat --workspace . --no-model --preview
+minicode skills list --workspace .
+minicode eval examples/tasks --config baseline
+```
+
+For model smoke testing, set the model environment variables first, then run:
+
+```bash
+minicode run "inspect project" --workspace . --llm-rerank --memory-reflection-mode llm
+```
 
 Model-backed runs use the multi-step query loop. Rule-planner runs remain a
 single safe action for deterministic local demos. `max_agent_steps` bounds model

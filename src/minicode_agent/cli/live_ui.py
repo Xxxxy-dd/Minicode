@@ -132,6 +132,9 @@ def run_chat_session(
             continue
         if command.startswith("/"):
             if handle_chat_command(command, session):
+                from rich.console import Console
+
+                Console().clear()
                 return
             continue
         session.turns.append(run_turn(session, command, config, model_client))
@@ -198,7 +201,7 @@ def render_chat_screen(session: ChatSession) -> None:
     console.clear()
     top = render_top_panel(session)
     conversation = render_conversation_area(session)
-    bottom = render_bottom_panel(session, console.size.width)
+    bottom = render_bottom_panel(session)
     console.print(top)
     console.print()
     console.print(conversation)
@@ -296,7 +299,7 @@ def render_turn_summary(turn: ChatTurn) -> Text:
     return text
 
 
-def render_bottom_panel(session: ChatSession, width: int) -> Panel:
+def render_bottom_panel(session: ChatSession) -> Panel:
     prompt_hint = Text()
     prompt_hint.append("Enter a task, or ", style="#cfc7b9")
     prompt_hint.append("/help", style="bold #9ad8ff")
@@ -305,9 +308,8 @@ def render_bottom_panel(session: ChatSession, width: int) -> Panel:
     prompt_hint.append(" / ", style="#cfc7b9")
     prompt_hint.append("/exit", style="bold #9ad8ff")
     prompt_hint.append(" to leave.", style="#cfc7b9")
-    white_rule = horizontal_rule(width)
     return Panel(
-        Group(white_rule, prompt_hint, white_rule),
+        prompt_hint,
         box=ROUNDED,
         border_style="#f08f5a",
         padding=(0, 2),
@@ -320,8 +322,18 @@ def input_bar() -> str:
 
     console = Console()
     rule = horizontal_rule(console.size.width)
+    if console.is_terminal:
+        console.print(rule)
+        console.print(Text("> ", style="#f08f5a"), end="")
+        console.file.write("\n")
+        console.file.flush()
+        console.print(rule)
+        console.file.write("\x1b[2A\r\x1b[2C")
+        console.file.flush()
+        return read_tty_line(console)
+
     console.print(rule)
-    value = console.input("[bold #f08f5a]> [/bold #f08f5a]").strip()
+    value = console.input("> ").strip()
     console.print(rule)
     return value
 
@@ -356,5 +368,28 @@ def summarize_turn(result) -> str:
 
 
 def horizontal_rule(width: int) -> Text:
-    rule_width = max(20, width - 10)
-    return Text("-" * rule_width, style="white")
+    rule_width = max(20, width - 1)
+    return Text("─" * rule_width, style="#8f8b84")
+
+
+def read_tty_line(console) -> str:
+    import msvcrt
+
+    buffer: list[str] = []
+    while True:
+        char = msvcrt.getwch()
+        if char in {"\r", "\n"}:
+            console.file.write("\n")
+            console.file.flush()
+            return "".join(buffer).strip()
+        if char == "\x03":
+            raise KeyboardInterrupt
+        if char in {"\b", "\x7f"}:
+            if buffer:
+                buffer.pop()
+                console.file.write("\b \b")
+                console.file.flush()
+            continue
+        buffer.append(char)
+        console.file.write(char)
+        console.file.flush()

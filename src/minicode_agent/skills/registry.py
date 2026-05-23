@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+import os
 from pathlib import Path
 from typing import Any
 
@@ -29,8 +30,9 @@ class SkillDefinition:
 
 
 class SkillRegistry:
-    def __init__(self, root: Path | None = None) -> None:
-        self.root = root or builtin_skills_path()
+    def __init__(self, root: Path | None = None, roots: list[Path] | None = None) -> None:
+        self.root = root
+        self.roots = roots or ([root] if root else [builtin_skills_path()])
         self._skills: dict[str, SkillDefinition] | None = None
 
     def list(self) -> list[SkillDefinition]:
@@ -44,12 +46,38 @@ class SkillRegistry:
 
     def _loaded(self) -> dict[str, SkillDefinition]:
         if self._skills is None:
-            self._skills = load_skills(self.root)
+            self._skills = load_skill_roots(self.roots)
         return self._skills
+
+
+def default_skill_registry(workspace: Path | None = None) -> SkillRegistry:
+    return SkillRegistry(roots=default_skill_roots(workspace))
+
+
+def default_skill_roots(workspace: Path | None = None) -> list[Path]:
+    roots = [builtin_skills_path()]
+    roots.extend(env_skill_paths())
+    if workspace is not None:
+        roots.append(workspace.expanduser().resolve() / ".minicode" / "skills")
+    return roots
+
+
+def env_skill_paths() -> list[Path]:
+    raw = os.getenv("MINICODE_SKILL_PATHS", "")
+    return [Path(part).expanduser().resolve() for part in raw.split(os.pathsep) if part.strip()]
 
 
 def builtin_skills_path() -> Path:
     return Path(__file__).parent / "builtin"
+
+
+def load_skill_roots(roots: list[Path]) -> dict[str, SkillDefinition]:
+    skills: dict[str, SkillDefinition] = {}
+    for root in roots:
+        if not root.exists():
+            continue
+        skills.update(load_skills(root))
+    return skills
 
 
 def load_skills(root: Path) -> dict[str, SkillDefinition]:

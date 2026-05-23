@@ -1,0 +1,17 @@
+name: code-style
+description: Apply project coding style and keep changes small, readable, and easy to review.
+tags:
+  - style
+  - review
+  - refactor
+applies_to:
+  - code cleanup
+  - refactor
+  - readability review
+examples:
+  - clean up this module without changing behavior
+  - make this diff easier to review
+aliases:
+  - style
+  - cleanup
+  - readability

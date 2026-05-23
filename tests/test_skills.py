@@ -5,7 +5,7 @@ from typer.testing import CliRunner
 from minicode_agent.cli.app import app
 from minicode_agent.skills import SkillError, SkillRegistry, SkillRouter
 from minicode_agent.models import ModelResponse
-from minicode_agent.skills.registry import parse_skill_metadata
+from minicode_agent.skills.registry import default_skill_registry, parse_skill_metadata
 
 
 def test_builtin_skill_registry_loads_expected_skills() -> None:
@@ -44,6 +44,34 @@ def test_skill_registry_reports_invalid_metadata(tmp_path) -> None:
         assert "Missing required metadata field 'description'" in str(exc)
     else:
         raise AssertionError("Expected SkillError")
+
+
+def test_default_skill_registry_loads_env_and_workspace_skills(tmp_path, monkeypatch) -> None:
+    env_root = tmp_path / "env-skills"
+    workspace = tmp_path / "workspace"
+    write_skill(env_root, "env-helper", "External helper skill.")
+    write_skill(workspace / ".minicode" / "skills", "workspace-helper", "Workspace helper skill.")
+    monkeypatch.setenv("MINICODE_SKILL_PATHS", str(env_root))
+
+    registry = default_skill_registry(workspace)
+    names = [skill.name for skill in registry.list()]
+
+    assert "debugging" in names
+    assert "env-helper" in names
+    assert "workspace-helper" in names
+
+
+def test_workspace_skill_overrides_external_and_builtin(tmp_path, monkeypatch) -> None:
+    env_root = tmp_path / "env-skills"
+    workspace = tmp_path / "workspace"
+    write_skill(env_root, "debugging", "External debugging skill.")
+    write_skill(workspace / ".minicode" / "skills", "debugging", "Workspace debugging skill.")
+    monkeypatch.setenv("MINICODE_SKILL_PATHS", str(env_root))
+
+    skill = default_skill_registry(workspace).get("debugging")
+
+    assert skill.metadata.description == "Workspace debugging skill."
+    assert skill.path == workspace / ".minicode" / "skills" / "debugging"
 
 
 def test_parse_skill_metadata_accepts_lists() -> None:
@@ -97,6 +125,15 @@ def test_cli_skills_route_shows_scores() -> None:
     assert "*" in result.output
 
 
+def test_cli_skills_list_includes_workspace_skills(tmp_path) -> None:
+    write_skill(tmp_path / ".minicode" / "skills", "local-helper", "Local helper skill.")
+
+    result = CliRunner().invoke(app, ["skills", "list", "--workspace", str(tmp_path)])
+
+    assert result.exit_code == 0, result.output
+    assert "local-helper" in result.output
+
+
 def test_skill_router_selects_debugging_or_test_writing_for_failing_tests() -> None:
     result = SkillRouter().route("修复 pytest failing tests")
 
@@ -147,3 +184,25 @@ def test_skill_router_can_llm_rerank_top_candidates() -> None:
     assert not result.rerank_fallback
     assert result.selected[0] == "code-review"
     assert result.rerank_reason
+
+
+def write_skill(root: Path, name: str, description: str) -> Path:
+    skill_dir = root / name
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "metadata.yaml").write_text(
+        f"""
+        name: {name}
+        description: {description}
+        tags:
+          - helper
+        applies_to:
+          - helper task
+        examples:
+          - use {name}
+        aliases:
+          - {name}
+        """,
+        encoding="utf-8",
+    )
+    (skill_dir / "SKILL.md").write_text(f"# {name}\n\nUse this skill for helper tasks.\n", encoding="utf-8")
+    return skill_dir

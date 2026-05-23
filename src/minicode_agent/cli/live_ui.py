@@ -5,7 +5,7 @@ from pathlib import Path
 
 from rich.align import Align
 from rich.box import ROUNDED
-from rich.console import Group, RenderableType
+from rich.console import Console, Group, RenderableType
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
@@ -152,16 +152,20 @@ def build_model_client(config: MiniCodeConfig):
 
 def run_turn(session: ChatSession, task: str, config: MiniCodeConfig, model_client) -> ChatTurn:
     runtime = RuntimeContext.create(config.workspace, run_kind="chat")
-    result = AgentLoop(
-        runtime,
-        task,
-        max_steps=config.max_agent_steps,
-        max_failed_tool_attempts=config.max_failed_tool_attempts,
-        model_client=model_client,
-        aux_model_client=model_client,
-        enable_skill_rerank=session.llm_rerank,
-        memory_reflection_mode=session.memory_reflection_mode,
-    ).run()
+    console = Console()
+    stream = ChatRunStream(console)
+    with console.status("[bold #f5c48c]MiniCode is thinking...[/bold #f5c48c]", spinner="dots"):
+        result = AgentLoop(
+            runtime,
+            task,
+            max_steps=config.max_agent_steps,
+            max_failed_tool_attempts=config.max_failed_tool_attempts,
+            model_client=model_client,
+            aux_model_client=model_client,
+            enable_skill_rerank=session.llm_rerank,
+            memory_reflection_mode=session.memory_reflection_mode,
+            event_callback=stream.handle,
+        ).run()
     summary = result.state.task_state.history_summary or summarize_turn(result)
     failure_reason = result.state.task_state.failed_attempts[-1] if result.state.current_phase.value == "failed" and result.state.task_state.failed_attempts else None
     return ChatTurn(
@@ -176,6 +180,53 @@ def run_turn(session: ChatSession, task: str, config: MiniCodeConfig, model_clie
         trace_path=runtime.trace_store.storage_path,
         memory_mode=session.memory_reflection_mode,
     )
+
+
+class ChatRunStream:
+    def __init__(self, console: Console) -> None:
+        self.console = console
+
+    def handle(self, event_type: str, payload: dict) -> None:
+        line = format_stream_event(event_type, payload)
+        if line:
+            self.console.print(line)
+
+
+def format_stream_event(event_type: str, payload: dict) -> Text | None:
+    if event_type == "phase_changed":
+        phase = payload.get("phase", "")
+        reason = payload.get("reason", "")
+        text = Text("phase ", style="#77706a")
+        text.append(str(phase), style="bold #9ad8ff")
+        if reason:
+            text.append(f"  {reason}", style="#cfc7b9")
+        return text
+    if event_type == "agent_planned":
+        text = Text("plan  ", style="#77706a")
+        text.append(str(payload.get("description") or ""), style="#efe8dd")
+        tool = payload.get("tool")
+        if tool:
+            text.append(f"  -> {tool}", style="#f5c48c")
+        return text
+    if event_type == "action_result":
+        ok = "ok" if payload.get("ok") else "failed"
+        style = "#9ad8ff" if payload.get("ok") else "#ffb3b3"
+        text = Text("tool  ", style="#77706a")
+        text.append(str(payload.get("tool") or ""), style="bold #f5c48c")
+        text.append(f"  {ok}", style=style)
+        result = str(payload.get("result") or "").strip().replace("\n", " ")
+        if result:
+            text.append(f"  {result[:96]}", style="#cfc7b9")
+        return text
+    if event_type == "planning_failed":
+        text = Text("model failed  ", style="bold #ffb3b3")
+        text.append(str(payload.get("reason") or ""), style="#ffb3b3")
+        return text
+    if event_type == "verification":
+        text = Text("verify ", style="#77706a")
+        text.append("passed" if payload.get("verified") else "failed", style="#9ad8ff" if payload.get("verified") else "#ffb3b3")
+        return text
+    return None
 
 
 def handle_chat_command(command: str, session: ChatSession) -> bool:
@@ -354,6 +405,13 @@ def render_avatar() -> Group:
 
 
 def summarize_turn(result) -> str:
+    for event in reversed(result.transcript):
+        if event.get("event") == "agent_planned":
+            payload = event.get("payload", {})
+            if payload.get("stop") and payload.get("description") == "Model returned a direct answer.":
+                for decision in result.state.task_state.decisions:
+                    if decision != "Keep the first loop minimal and traceable.":
+                        return str(decision)[:240]
     for event in reversed(result.transcript):
         payload = event.get("payload", {})
         if event.get("event") == "agent_observed":

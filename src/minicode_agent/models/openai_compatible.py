@@ -15,11 +15,13 @@ class OpenAICompatibleClient(ModelClient):
         api_key: str | None = None,
         base_url: str = "https://api.openai.com/v1",
         timeout_seconds: int = 60,
+        json_response_format: bool = True,
     ) -> None:
         self.model = model
         self.api_key = api_key or os.getenv("MINICODE_MODEL_API_KEY") or os.getenv("OPENAI_API_KEY")
         self.base_url = base_url.rstrip("/")
         self.timeout_seconds = timeout_seconds
+        self.json_response_format = json_response_format
 
     def complete(self, messages: list[ModelMessage]) -> ModelResponse:
         if not self.api_key:
@@ -30,6 +32,8 @@ class OpenAICompatibleClient(ModelClient):
             "messages": [{"role": message.role, "content": message.content} for message in messages],
             "temperature": 0,
         }
+        if self.json_response_format:
+            body["response_format"] = {"type": "json_object"}
         request = urllib.request.Request(
             f"{self.base_url}/chat/completions",
             data=json.dumps(body).encode("utf-8"),

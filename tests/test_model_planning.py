@@ -22,8 +22,50 @@ class MockModelClient:
 
 
 def test_parse_model_plan_requires_json_object() -> None:
-    with pytest.raises(ValueError, match="valid JSON"):
-        parse_model_plan("not json")
+    plan = parse_model_plan("not json")
+
+    assert plan.stop
+    assert plan.final_answer == "not json"
+    assert plan.action is None
+
+
+def test_parse_model_plan_extracts_markdown_json() -> None:
+    plan = parse_model_plan(
+        """
+        ```json
+        {
+          "summary": "Done.",
+          "selected_skill": null,
+          "next_actions": ["Report result."],
+          "stop": true,
+          "final_answer": "All set.",
+          "action": null
+        }
+        ```
+        """
+    )
+
+    assert plan.stop
+    assert plan.final_answer == "All set."
+
+
+def test_parse_model_plan_extracts_json_from_explained_response() -> None:
+    plan = parse_model_plan(
+        """
+        I will read the README first.
+        {
+          "summary": "Read README.",
+          "selected_skill": null,
+          "next_actions": ["Read README.md."],
+          "stop": false,
+          "final_answer": null,
+          "action": {"tool": "read_file", "arguments": {"path": "README.md"}}
+        }
+        """
+    )
+
+    assert plan.action is not None
+    assert plan.action.tool == "read_file"
 
 
 def test_parse_model_plan_rejects_missing_action() -> None:
@@ -105,6 +147,16 @@ def test_agent_loop_uses_mock_model_planner(tmp_path) -> None:
     events = runtime.trace_store.list_events("agent_model_test")
     first_model_request = next(event for event in events if event.event_type == "model_requested")
     assert first_model_request.payload["skill_count"] >= 1
+
+
+def test_agent_loop_treats_direct_model_answer_as_stop(tmp_path) -> None:
+    runtime = RuntimeContext.create(tmp_path, run_id="agent_model_direct_answer_test")
+    model = MockModelClient("我是 MiniCode Agent。")
+
+    result = AgentLoop(runtime, "你是什么模型", model_client=model).run()
+
+    assert result.state.current_phase == AgentPhase.DONE
+    assert "我是 MiniCode Agent。" in result.state.task_state.decisions
 
 
 def test_agent_loop_records_model_planning_failure(tmp_path) -> None:

@@ -61,6 +61,22 @@ def test_openai_client_parses_chat_completion(monkeypatch) -> None:
     assert captured["timeout"] == 3
     assert captured["headers"]["Authorization"] == "Bearer secret"
     assert captured["body"]["model"] == "demo-model"
+    assert captured["body"]["response_format"] == {"type": "json_object"}
+
+
+def test_openai_client_can_disable_json_response_format(monkeypatch) -> None:
+    captured = {}
+
+    def fake_urlopen(request, timeout):
+        captured["body"] = json.loads(request.data.decode("utf-8"))
+        return FakeHTTPResponse({"choices": [{"message": {"content": "hello"}}]})
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    client = OpenAICompatibleClient(model="demo-model", api_key="secret", json_response_format=False)
+
+    client.complete([ModelMessage(role="user", content="hello")])
+
+    assert "response_format" not in captured["body"]
 
 
 def test_openai_client_wraps_http_error(monkeypatch) -> None:

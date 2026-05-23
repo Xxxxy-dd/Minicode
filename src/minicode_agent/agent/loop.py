@@ -43,6 +43,7 @@ class AgentLoop:
         enable_compression: bool = True,
         enable_subagents: bool = True,
         memory_reflection_mode: str = "deterministic",
+        event_callback=None,
     ) -> None:
         self.runtime = runtime
         self.max_steps = max_steps
@@ -62,6 +63,7 @@ class AgentLoop:
         self.enable_compression = enable_compression
         self.enable_subagents = enable_subagents
         self.memory_reflection_mode = normalize_memory_reflection_mode(memory_reflection_mode)
+        self.event_callback = event_callback
         self.aux_model_client = aux_model_client or model_client
         registry = create_default_registry(include_subagents=enable_subagents)
         self.executor = ToolExecutor(
@@ -549,18 +551,22 @@ class AgentLoop:
 
     def _phase(self, phase: AgentPhase, reason: str) -> None:
         self.state.current_phase = phase
-        self.runtime.trace_store.append(
-            self.runtime.run_id,
-            "phase_changed",
-            {
-                "phase": phase.value,
-                "reason": reason,
-            },
-        )
+        payload = {
+            "phase": phase.value,
+            "reason": reason,
+        }
+        self.runtime.trace_store.append(self.runtime.run_id, "phase_changed", payload)
+        self._emit_event("phase_changed", payload)
 
     def _observe(self, event_type: str, payload: dict[str, Any]) -> None:
         self.transcript.append({"event": event_type, "payload": payload})
         self.runtime.trace_store.append(self.runtime.run_id, event_type, payload)
+        self._emit_event(event_type, payload)
+
+    def _emit_event(self, event_type: str, payload: dict[str, Any]) -> None:
+        if self.event_callback is None:
+            return
+        self.event_callback(event_type, payload)
 
     def _execute_tool(self, name: str, arguments: dict[str, Any]):
         if name == "spawn_subagent" and not self.enable_subagents:

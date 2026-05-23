@@ -4,7 +4,8 @@ from rich.console import Console
 from typer.testing import CliRunner
 
 from minicode_agent.cli.app import app
-from minicode_agent.cli.live_ui import ChatSession, ChatTurn, render_bottom_panel, render_conversation_area, render_top_panel
+from minicode_agent.cli.live_ui import ChatSession, ChatTurn, format_stream_event, render_bottom_panel, render_conversation_area, render_top_panel, summarize_turn
+from minicode_agent.core.state import AgentPhase, AgentState, TaskState
 
 
 def test_chat_command_is_exposed() -> None:
@@ -75,3 +76,35 @@ def test_interactive_input_bar_has_focus_rules() -> None:
     assert result.exit_code == 0, result.output
     assert "> " in result.output
     assert "? for shortcuts" not in result.output
+
+
+def test_format_stream_event_shows_phase_and_tool() -> None:
+    phase = format_stream_event("phase_changed", {"phase": "plan", "reason": "Draft a short plan."})
+    tool = format_stream_event("action_result", {"tool": "read_file", "ok": True, "result": "README.md"})
+
+    assert phase is not None
+    assert "plan" in phase.plain
+    assert tool is not None
+    assert "read_file" in tool.plain
+
+
+def test_summarize_turn_prefers_direct_final_answer() -> None:
+    class Result:
+        transcript = [
+            {
+                "event": "agent_planned",
+                "payload": {"stop": True, "description": "Model returned a direct answer."},
+            }
+        ]
+        state = AgentState(
+            run_id="run_1",
+            workspace=".",
+            user_goal="hello",
+            current_phase=AgentPhase.DONE,
+            task_state=TaskState(
+                goal="hello",
+                decisions=["你好，我是 MiniCode。", "Keep the first loop minimal and traceable."],
+            ),
+        )
+
+    assert summarize_turn(Result()) == "你好，我是 MiniCode。"

@@ -242,6 +242,7 @@ same deterministic admission rules decide what gets stored.
 - [Architecture](docs/architecture.md)
 - [Security](docs/security.md)
 - [Demo Commands](docs/demo.md)
+- [V1.1 Iteration Plan](docs/V1.1迭代优化计划.md)
 - [Core Concepts](docs/核心概念说明.md)
 - [Interview Q&A](docs/面试问答.md)
 

@@ -16,6 +16,7 @@ from minicode_agent.runtime import RuntimeContext
 from minicode_agent.tools.executor import ToolExecutor
 from minicode_agent.tools.registry import create_default_registry
 from minicode_agent.tools.types import ToolContext
+from minicode_agent.cli.live_ui import run_chat_session
 
 app = typer.Typer(
     name="minicode",
@@ -93,6 +94,39 @@ def run(
     console.print(f"Final phase: {result.state.current_phase.value}")
     console.print(f"Selected skills: {', '.join(result.state.selected_skills) or '(none)'}")
     console.print(f"Tool calls: {result.state.metrics.tool_calls}")
+
+
+@app.command()
+def chat(
+    task: str | None = typer.Argument(None, help="Optional initial task to run in the session."),
+    workspace: Path = typer.Option(
+        Path.cwd(),
+        "--workspace",
+        "-w",
+        help="Workspace directory for the chat session.",
+    ),
+    model: str | None = typer.Option(None, "--model", help="OpenAI-compatible model name to use."),
+    model_base_url: str | None = typer.Option(None, "--model-base-url", help="OpenAI-compatible API base URL."),
+    no_model: bool = typer.Option(False, "--no-model", help="Use the deterministic rule planner even if model env vars are set."),
+    llm_rerank: bool = typer.Option(False, "--llm-rerank", help="Use the auxiliary model to rerank skill candidates."),
+    memory_reflection_mode: str = typer.Option(
+        "deterministic",
+        "--memory-reflection-mode",
+        help="Memory reflection mode: deterministic or llm.",
+    ),
+    preview: bool = typer.Option(False, "--preview", help="Render one screen and exit without entering interactive mode."),
+) -> None:
+    """Open the Claude-like interactive CLI layout."""
+    run_chat_session(
+        task,
+        workspace=workspace,
+        model=model,
+        model_base_url=model_base_url,
+        no_model=no_model,
+        llm_rerank=llm_rerank,
+        memory_reflection_mode=memory_reflection_mode,
+        preview=preview,
+    )
 
 
 @app.command()

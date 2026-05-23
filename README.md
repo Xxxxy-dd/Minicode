@@ -9,6 +9,7 @@ V1 implements an end-to-end coding-agent loop with tool calling, permissions, tr
 V1 is feature-complete after the Day 17 polishing pass:
 
 - CLI entrypoint
+- Claude-like interactive `minicode chat` shell with bottom command bar and preview mode
 - configuration model
 - core state models
 - tool interface models
@@ -95,6 +96,8 @@ V1 is feature-complete after the Day 17 polishing pass:
 minicode run "fix the failing tests"
 minicode run "inspect project" --model gpt-4.1-mini
 minicode run "inspect project" --no-model
+minicode chat --no-model --preview
+minicode chat "inspect project" --no-model
 minicode run "inspect project" --model gpt-4.1-mini --llm-rerank --memory-reflection-mode llm
 minicode run "review current diff"
 minicode skills list

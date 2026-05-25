@@ -133,18 +133,19 @@ def run_chat_session(
     if session.turns:
         render_latest_turn(session)
     while True:
-        command = input_bar()
+        command, input_panel_height = input_bar()
         if not command:
+            clear_previous_terminal_lines(Console(), input_panel_height)
             continue
         if command.startswith("/"):
+            clear_previous_terminal_lines(Console(), input_panel_height)
             if handle_chat_command(command, session):
-                from rich.console import Console
-
                 Console().clear()
                 return
             render_latest_notice(session)
             continue
-        session.turns.append(run_turn(session, command, config, model_client))
+        session.turns.append(run_turn(session, command, config, model_client, input_panel_height=input_panel_height))
+        refresh_chat_intro(session)
         render_latest_turn(session)
 
 
@@ -158,24 +159,35 @@ def build_model_client(config: MiniCodeConfig):
     )
 
 
-def run_turn(session: ChatSession, task: str, config: MiniCodeConfig, model_client) -> ChatTurn:
+def run_turn(
+    session: ChatSession,
+    task: str,
+    config: MiniCodeConfig,
+    model_client,
+    input_panel_height: int = 0,
+) -> ChatTurn:
     if is_direct_chat_query(task):
+        if input_panel_height:
+            clear_previous_terminal_lines(Console(), input_panel_height)
         return build_direct_chat_turn(session, task)
     runtime = RuntimeContext.create(config.workspace, run_kind="chat")
     console = Console()
-    stream = ChatRunStream(console)
-    result = AgentLoop(
-        runtime,
-        task,
-        max_steps=config.max_agent_steps,
-        max_failed_tool_attempts=config.max_failed_tool_attempts,
-        model_client=model_client,
-        aux_model_client=model_client,
-        enable_skill_rerank=session.llm_rerank,
-        memory_reflection_mode=session.memory_reflection_mode,
-        event_callback=stream.handle,
-        approval_callback=build_approval_callback(console) if session.interactive_approval else None,
-    ).run()
+    status = console.status("[bold #f5c48c]MiniCode is thinking...[/bold #f5c48c]", spinner="dots")
+    with status:
+        result = AgentLoop(
+            runtime,
+            task,
+            max_steps=config.max_agent_steps,
+            max_failed_tool_attempts=config.max_failed_tool_attempts,
+            model_client=model_client,
+            aux_model_client=model_client,
+            enable_skill_rerank=session.llm_rerank,
+            memory_reflection_mode=session.memory_reflection_mode,
+            event_callback=None,
+            approval_callback=build_approval_callback(console) if session.interactive_approval else None,
+        ).run()
+    if input_panel_height:
+        clear_previous_terminal_lines(console, input_panel_height)
     summary = summarize_turn(result) or result.state.task_state.history_summary or "No summary available."
     failure_reason = result.state.task_state.failed_attempts[-1] if result.state.current_phase.value == "failed" and result.state.task_state.failed_attempts else None
     return ChatTurn(
@@ -343,8 +355,20 @@ def render_chat_intro(session: ChatSession, console: Console | None = None) -> N
     console.clear()
     console.print(render_top_panel(session))
     console.print()
-    console.print(render_bottom_panel(session))
+
+
+def refresh_chat_intro(session: ChatSession, console: Console | None = None) -> None:
+    console = console or Console()
+    if not console.is_terminal:
+        return
+    console.file.write("\x1b[s\x1b[H")
+    top_panel = render_top_panel(session)
+    top_height = len(console.render_lines(top_panel, console.options)) + 1
+    clear_forward_terminal_lines(console, top_height)
+    console.print(top_panel)
     console.print()
+    console.file.write("\x1b[u")
+    console.file.flush()
 
 
 def render_latest_notice(session: ChatSession, console: Console | None = None) -> None:
@@ -463,7 +487,7 @@ def wrap_text(value: str, style: str, width: int = 76) -> Text:
     return text
 
 
-def render_bottom_panel(session: ChatSession) -> Panel:
+def render_bottom_panel(session: ChatSession | None = None) -> Panel:
     prompt_hint = Text()
     prompt_hint.append("Enter a task, or ", style="#cfc7b9")
     prompt_hint.append("/help", style="bold #9ad8ff")
@@ -481,10 +505,28 @@ def render_bottom_panel(session: ChatSession) -> Panel:
     )
 
 
-def input_bar() -> str:
+def input_bar() -> tuple[str, int]:
     console = Console()
+    bottom_panel = render_bottom_panel(None)
+    panel_height = len(console.render_lines(bottom_panel, console.options))
+    console.print(bottom_panel)
     value = console.input("> ").strip()
-    return value
+    clear_previous_terminal_lines(console, 1)
+    return value, panel_height
+
+
+def clear_previous_terminal_lines(console: Console, count: int) -> None:
+    if console.is_terminal:
+        console.file.write("\x1b[1A\x1b[2K" * count)
+        console.file.flush()
+
+
+def clear_forward_terminal_lines(console: Console, count: int) -> None:
+    if console.is_terminal:
+        console.file.write("\x1b[2K")
+        console.file.write("\x1b[1B\x1b[2K" * max(0, count - 1))
+        console.file.write(f"\x1b[{max(0, count - 1)}A")
+        console.file.flush()
 
 
 def render_avatar() -> Group:

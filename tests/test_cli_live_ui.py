@@ -12,7 +12,9 @@ from minicode_agent.cli.live_ui import (
     input_bar,
     render_bottom_panel,
     render_conversation_area,
+    render_chat_intro,
     render_latest_turn,
+    refresh_chat_intro,
     render_top_panel,
     summarize_turn,
     wrap_text,
@@ -109,6 +111,50 @@ def test_latest_turn_render_does_not_repeat_top_card() -> None:
     assert "skills:" not in text
 
 
+def test_chat_intro_does_not_render_fixed_command_panel() -> None:
+    session = ChatSession(
+        workspace=Path("."),
+        model_name=None,
+        model_base_url="https://api.openai.com/v1",
+        no_model=True,
+        llm_rerank=False,
+        memory_reflection_mode="deterministic",
+    )
+
+    console = Console(record=True, width=120)
+    render_chat_intro(session, console)
+    text = console.export_text()
+
+    assert "MiniCode Agent" in text
+    assert "Enter a task" not in text
+    assert "/help" not in text
+
+
+def test_refresh_chat_intro_is_noop_for_recorded_console() -> None:
+    session = ChatSession(
+        workspace=Path("."),
+        model_name=None,
+        model_base_url="https://api.openai.com/v1",
+        no_model=True,
+        llm_rerank=False,
+        memory_reflection_mode="deterministic",
+        turns=[
+            ChatTurn(
+                prompt="hello",
+                run_id="run_1",
+                final_phase="done",
+                tool_calls=0,
+                summary="hi",
+            )
+        ],
+    )
+    console = Console(record=True, width=120)
+
+    refresh_chat_intro(session, console)
+
+    assert console.export_text() == ""
+
+
 def test_help_command_shows_a_system_notice() -> None:
     result = CliRunner().invoke(app, ["chat", "/help", "--workspace", ".", "--no-model", "--preview"])
 
@@ -121,8 +167,9 @@ def test_interactive_input_bar_has_focus_rules() -> None:
     result = CliRunner().invoke(app, ["chat", "--workspace", ".", "--no-model"], input="/exit\n")
 
     assert result.exit_code == 0, result.output
-    assert "> " in result.output
+    assert "Command" in result.output
     assert "? for shortcuts" not in result.output
+    assert "UnboundLocalError" not in result.output
 
 
 def test_input_bar_does_not_render_extra_rules(monkeypatch) -> None:
@@ -130,10 +177,13 @@ def test_input_bar_does_not_render_extra_rules(monkeypatch) -> None:
     monkeypatch.setattr("minicode_agent.cli.live_ui.Console", lambda: console)
     monkeypatch.setattr(console, "input", lambda prompt: (console.print(prompt), "hello")[1])
 
-    assert input_bar() == "hello"
+    value, panel_height = input_bar()
+    assert value == "hello"
+    assert panel_height > 0
     text = console.export_text()
+    assert "Command" in text
+    assert "Enter a task" in text
     assert "> " in text
-    assert "─" not in text
 
 
 def test_format_stream_event_shows_phase_and_tool() -> None:
@@ -215,5 +265,5 @@ def test_chat_task_still_runs_agent_loop_for_workspace_work(tmp_path) -> None:
     result = CliRunner().invoke(app, ["chat", "inspect project", "--workspace", str(tmp_path), "--no-model", "--preview"])
 
     assert result.exit_code == 0, result.output
-    assert "phase init" in result.output
+    assert "phase init" not in result.output
     assert "MiniCode Agent" in result.output

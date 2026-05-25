@@ -21,12 +21,37 @@ class PermissionMode(StrEnum):
     DENY = "deny"
 
 
+class DuplicatePolicy(StrEnum):
+    ALLOW = "allow"
+    BLOCK_IDENTICAL_SUCCESS = "block_identical_success"
+
+
+class ToolStateEffect(StrEnum):
+    MARKS_MODIFIED_FILE = "marks_modified_file"
+    RECORDS_PATH_FACT = "records_path_fact"
+    RECORDS_OUTPUT_FACT = "records_output_fact"
+
+
+class ToolIntent(StrEnum):
+    FILE_OVERWRITE = "file_overwrite"
+    FILE_APPEND = "file_append"
+    FILE_CREATE = "file_create"
+    FILE_DELETE = "file_delete"
+    FILE_EDIT = "file_edit"
+
+
 class ToolSpec(BaseModel):
     name: str
     description: str
     input_schema: dict[str, Any] = Field(default_factory=dict)
     risk_level: RiskLevel
     permission: PermissionMode
+    duplicate_policy: DuplicatePolicy = DuplicatePolicy.ALLOW
+    state_effects: tuple[ToolStateEffect, ...] = ()
+    intents: tuple[ToolIntent, ...] = ()
+    capture_full_output: bool = False
+    counts_as_subagent_call: bool = False
+    subagent_roles: tuple[str, ...] = ()
     timeout_seconds: int = 30
 
 

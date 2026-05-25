@@ -29,6 +29,7 @@ def build_planning_prompt(
             "description": tool.spec.description,
             "risk_level": tool.spec.risk_level.value,
             "permission": tool.spec.permission.value,
+            "intents": [intent.value for intent in tool.spec.intents],
             "input_schema": tool.spec.input_schema,
         }
         for tool in registry.list()
@@ -43,6 +44,9 @@ def build_planning_prompt(
         "Use null for final_answer when stop=false and always use a string for final_answer when stop=true. "
         "Set stop=true only when the task is complete. When stop=false, action must contain tool and arguments. "
         "You may only request tools; you cannot execute actions yourself. Prefer read-only tools unless the task clearly requires changes. "
+        "For file changes, choose the tool by intent and inspect each tool's declared intents: use write_file to overwrite or create content, append_file to add content to the end, create_file only when the user asks for a new file and existing files should not be overwritten, edit_file for exact replacements, and delete_file for deletion. "
+        "When using append_file, preserve formatting: use append_format=text or markdown for prose, code for source files, json for JSON arrays/objects, csv for tables, toml for TOML, yaml for YAML, raw only when exact byte-like concatenation is requested; if the user asks to append a single line, pass append_strategy=line or separator='\\n', and use paragraph for prose blocks. Use overwrite=false only when the user explicitly wants to protect existing content. "
+        "Do not repeat the same successful tool call with the same arguments; use the recent observation to answer or choose a different necessary tool. "
         "Do not request tools whose permission is ask unless the user clearly asked to modify files or run commands."
     )
     user_payload = {
@@ -50,6 +54,11 @@ def build_planning_prompt(
         "task_state": task_state.model_dump() if task_state else {"goal": goal},
         "known_files": known_files[:50],
         "recent_observations": (observations or [])[-10:],
+        "tool_loop_policy": {
+            "after_successful_read": "If a requested file was successfully read and the user asked to read it, summarize the observation and stop.",
+            "no_duplicate_calls": "Never call the same tool with the same arguments again after it succeeded.",
+            "continue_only_if_needed": "Continue with a different tool only when the original user goal requires more evidence.",
+        },
         "active_skills": [skill_prompt_payload(skill) for skill in (skills or [])],
         "relevant_memory": memory_prompt_payloads(memories or []),
         "available_tools": tools,

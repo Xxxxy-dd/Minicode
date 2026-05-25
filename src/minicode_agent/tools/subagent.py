@@ -14,6 +14,7 @@ class SpawnSubagentTool(BaseTool):
         description="Run a bounded read-only explorer or reviewer subagent and return structured findings.",
         risk_level=RiskLevel.SAFE,
         permission=PermissionMode.ALLOW,
+        counts_as_subagent_call=True,
         input_schema={
             "role": "explorer | reviewer",
             "task": "Subtask for the subagent.",

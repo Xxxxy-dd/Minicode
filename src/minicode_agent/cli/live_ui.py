@@ -82,6 +82,7 @@ class ChatSession:
     no_model: bool
     llm_rerank: bool
     memory_reflection_mode: str
+    interactive_approval: bool = True
     notices: list[str] = field(default_factory=list)
     turns: list[ChatTurn] = field(default_factory=list)
 
@@ -114,6 +115,7 @@ def run_chat_session(
         no_model=no_model,
         llm_rerank=llm_rerank,
         memory_reflection_mode=memory_reflection_mode,
+        interactive_approval=not preview,
     )
     model_client = build_model_client(config)
     initial_task = task.strip() if task and task.strip() else None
@@ -156,18 +158,18 @@ def run_turn(session: ChatSession, task: str, config: MiniCodeConfig, model_clie
     runtime = RuntimeContext.create(config.workspace, run_kind="chat")
     console = Console()
     stream = ChatRunStream(console)
-    with console.status("[bold #f5c48c]MiniCode is thinking...[/bold #f5c48c]", spinner="dots"):
-        result = AgentLoop(
-            runtime,
-            task,
-            max_steps=config.max_agent_steps,
-            max_failed_tool_attempts=config.max_failed_tool_attempts,
-            model_client=model_client,
-            aux_model_client=model_client,
-            enable_skill_rerank=session.llm_rerank,
-            memory_reflection_mode=session.memory_reflection_mode,
-            event_callback=stream.handle,
-        ).run()
+    result = AgentLoop(
+        runtime,
+        task,
+        max_steps=config.max_agent_steps,
+        max_failed_tool_attempts=config.max_failed_tool_attempts,
+        model_client=model_client,
+        aux_model_client=model_client,
+        enable_skill_rerank=session.llm_rerank,
+        memory_reflection_mode=session.memory_reflection_mode,
+        event_callback=stream.handle,
+        approval_callback=build_approval_callback(console) if session.interactive_approval else None,
+    ).run()
     summary = summarize_turn(result) or result.state.task_state.history_summary or "No summary available."
     failure_reason = result.state.task_state.failed_attempts[-1] if result.state.current_phase.value == "failed" and result.state.task_state.failed_attempts else None
     return ChatTurn(
@@ -251,6 +253,15 @@ class ChatRunStream:
         line = format_stream_event(event_type, payload)
         if line:
             self.console.print(line)
+
+
+def build_approval_callback(console: Console):
+    def approve(tool: str, arguments: dict, reason: str) -> bool:
+        prompt = "是否批准？[y/N] "
+        answer = console.input(f"[bold #9ad8ff]{prompt}[/bold #9ad8ff]").strip().lower()
+        return answer in {"y", "yes"}
+
+    return approve
 
 
 def format_stream_event(event_type: str, payload: dict) -> Text | None:
@@ -469,7 +480,7 @@ def render_avatar() -> Group:
 def summarize_turn(result) -> str:
     for decision in result.state.task_state.decisions:
         if decision != "Keep the first loop minimal and traceable.":
-            return str(decision)[:240]
+            return str(decision)
     for event in reversed(result.transcript):
         payload = event.get("payload", {})
         if event.get("event") == "agent_observed":
@@ -480,7 +491,7 @@ def summarize_turn(result) -> str:
             value = payload.get("description") or payload.get("tool")
             if value:
                 return str(value)[:160]
-    return result.state.task_state.decisions[-1][:160] if result.state.task_state.decisions else "No summary available."
+    return result.state.task_state.decisions[-1] if result.state.task_state.decisions else "No summary available."
 
 
 def horizontal_rule(width: int) -> Text:

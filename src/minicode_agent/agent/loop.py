@@ -1,5 +1,6 @@
+import json
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 from minicode_agent.config import normalize_memory_reflection_mode
 from minicode_agent.context import TaskStateCompressor
@@ -11,19 +12,51 @@ from minicode_agent.runtime import RuntimeContext
 from minicode_agent.skills import SkillDefinition, SkillError, SkillRouter, default_skill_registry
 from minicode_agent.tools.executor import ToolExecutor
 from minicode_agent.tools.registry import create_default_registry
-from minicode_agent.tools.types import ToolContext, ToolObservation
+from minicode_agent.tools.types import DuplicatePolicy, ToolContext, ToolIntent, ToolObservation
 
 
 MAX_OBSERVATION_CHARS = 4000
 SINGLE_OBSERVATION_COMPRESSION_CHARS = 3000
 RECENT_OBSERVATIONS_COMPRESSION_CHARS = 5000
 TOTAL_HISTORY_COMPRESSION_CHARS = 8000
-
-
 @dataclass
 class AgentRunResult:
     state: AgentState
     transcript: list[dict[str, Any]]
+
+
+@dataclass(frozen=True)
+class IntentGuardRule:
+    tokens: tuple[str, ...]
+    allowed_intents: tuple[ToolIntent, ...]
+    reason: str
+
+
+INTENT_GUARD_RULES = (
+    IntentGuardRule(
+        tokens=("追加", "append", "continue", "继续写", "继续"),
+        allowed_intents=(ToolIntent.FILE_APPEND,),
+        reason="append intent should use append_file",
+    ),
+    IntentGuardRule(
+        tokens=("覆盖", "overwrite", "replace", "重写", "改写"),
+        allowed_intents=(ToolIntent.FILE_OVERWRITE, ToolIntent.FILE_EDIT),
+        reason="overwrite intent should use write_file or edit_file",
+    ),
+    IntentGuardRule(
+        tokens=("删除", "delete", "remove", "移除"),
+        allowed_intents=(ToolIntent.FILE_DELETE,),
+        reason="delete intent should use delete_file",
+    ),
+    IntentGuardRule(
+        tokens=("新建", "创建", "create", "new file"),
+        allowed_intents=(ToolIntent.FILE_CREATE,),
+        reason="create intent should use create_file or write_file",
+    ),
+)
+
+
+ApprovalCallback = Callable[[str, dict[str, Any], str], bool]
 
 
 class AgentLoop:
@@ -44,6 +77,7 @@ class AgentLoop:
         enable_subagents: bool = True,
         memory_reflection_mode: str = "deterministic",
         event_callback=None,
+        approval_callback: ApprovalCallback | None = None,
     ) -> None:
         self.runtime = runtime
         self.max_steps = max_steps
@@ -64,6 +98,7 @@ class AgentLoop:
         self.enable_subagents = enable_subagents
         self.memory_reflection_mode = normalize_memory_reflection_mode(memory_reflection_mode)
         self.event_callback = event_callback
+        self.approval_callback = approval_callback
         self.aux_model_client = aux_model_client or model_client
         registry = create_default_registry(include_subagents=enable_subagents)
         self.executor = ToolExecutor(
@@ -79,6 +114,8 @@ class AgentLoop:
         )
         self.failure_reason: str | None = None
         self.observations: list[dict[str, Any]] = []
+        self.successful_action_results: dict[str, dict[str, Any]] = {}
+        self.display_outputs: dict[str, str] = {}
         self.max_failed_tool_attempts = max_failed_tool_attempts
         self.loop_turns = 0
         self.skill_registry = default_skill_registry(runtime.workspace)
@@ -245,6 +282,39 @@ class AgentLoop:
                 self.failure_reason = "model did not provide an action"
                 self.state.task_state.failed_attempts.append(self.failure_reason)
                 return self._finish(False)
+            mismatch_reason = self._tool_intent_mismatch_reason(self.state.user_goal, decision.action.tool)
+            if mismatch_reason:
+                self.failure_reason = mismatch_reason
+                self.state.task_state.failed_attempts.append(mismatch_reason)
+                self._observe(
+                    "planning_failed",
+                    {
+                        "reason": mismatch_reason,
+                        "planner": "model",
+                        "turn": turn_index,
+                        "tool": decision.action.tool,
+                    },
+                )
+                return self._finish(False)
+
+            duplicate_result = self._duplicate_successful_action(decision.action)
+            if duplicate_result is not None:
+                final_answer = self._duplicate_action_final_answer(decision.action, duplicate_result)
+                self.state.task_state.decisions.append(final_answer)
+                self._observe(
+                    "repeated_action_blocked",
+                    {
+                        "tool": decision.action.tool,
+                        "arguments": decision.action.arguments,
+                        "reason": "identical successful action already executed",
+                    },
+                )
+                self._phase(AgentPhase.VERIFY, "Stop repeated successful tool action.")
+                self._observe("verification", {"verified": True, "reason": "repeated_successful_action"})
+                self._phase(AgentPhase.REFLECT, "Capture a short reflection.")
+                self._reflect()
+                self._observe("reflection", {"files_touched": self.state.files_touched})
+                return self._finish(True)
 
             self._phase(AgentPhase.ACT, "Execute model-requested tool action.")
             try:
@@ -277,6 +347,7 @@ class AgentLoop:
                 return self._finish(False)
 
             if action_result["ok"]:
+                self._remember_successful_action(decision.action, action_result)
                 failed_tool_attempts = 0
                 self.failure_reason = None
                 continue
@@ -305,8 +376,11 @@ class AgentLoop:
         context = ToolContext(workspace=self.runtime.workspace)
         observation = self._execute_tool(tool, arguments)
         result = self._tool_result(tool, observation)
-        if tool == "spawn_subagent" and observation.ok:
+        tool_spec = self.executor.registry.get(tool).spec
+        if tool_spec.counts_as_subagent_call and observation.ok:
             self.state.metrics.subagent_calls += 1
+        if tool_spec.capture_full_output and observation.ok:
+            self.display_outputs[action_identity(tool, arguments)] = observation.output
         if observation.ok:
             path = arguments.get("path")
             if path:
@@ -480,6 +554,30 @@ class AgentLoop:
         self.state.metrics.output_tokens += decision.output_tokens
         return decision
 
+    def _remember_successful_action(self, action: PlannedAction, result: dict[str, Any]) -> None:
+        action_key = action_identity(action.tool, action.arguments)
+        if self._blocks_identical_success(action.tool):
+            self.successful_action_results[action_key] = result
+
+    def _duplicate_successful_action(self, action: PlannedAction) -> dict[str, Any] | None:
+        if not self._blocks_identical_success(action.tool):
+            return None
+        return self.successful_action_results.get(action_identity(action.tool, action.arguments))
+
+    def _blocks_identical_success(self, tool_name: str) -> bool:
+        tool = self.executor.registry.get(tool_name)
+        return tool.spec.duplicate_policy == DuplicatePolicy.BLOCK_IDENTICAL_SUCCESS
+
+    def _duplicate_action_final_answer(self, action: PlannedAction, result: dict[str, Any]) -> str:
+        output = self.display_outputs.get(action_identity(action.tool, action.arguments))
+        output = str(output or result.get("output") or result.get("result") or "").strip()
+        if self.executor.registry.get(action.tool).spec.capture_full_output and output:
+            return output
+        target = action.arguments.get("path") or action.arguments.get("pattern") or action.tool
+        if output:
+            return f"已完成 {action.tool}({target})。结果：\n{output}"
+        return f"已完成 {action.tool}({target})。"
+
     def _maybe_compress_context(self) -> None:
         if not self.enable_compression:
             return
@@ -581,11 +679,36 @@ class AgentLoop:
             self.failure_reason = "max agent steps exceeded"
             raise RuntimeError(self.failure_reason)
         self.steps += 1
-        observation = self.executor.execute(name, ToolContext(workspace=self.runtime.workspace), arguments)
+        context = ToolContext(workspace=self.runtime.workspace)
+        approved = self._request_tool_approval(name, arguments, context)
+        observation = self.executor.execute(name, context, arguments, approved=approved)
         self.state.metrics.tool_calls += 1
         if not observation.ok and observation.metadata.get("permission") == "deny":
             self.state.metrics.permission_blocks += 1
         return observation
+
+    def _request_tool_approval(self, name: str, arguments: dict[str, Any], context: ToolContext) -> bool:
+        if self.approval_callback is None:
+            return False
+        tool = self.executor.registry.get(name)
+        decision = self.executor.policy.decide(
+            tool.spec,
+            arguments=arguments,
+            workspace=context.resolved_workspace,
+        )
+        if decision.mode.value != "ask":
+            return False
+        return self.approval_callback(name, arguments, decision.reason)
+
+    def _tool_intent_mismatch_reason(self, goal: str, tool_name: str) -> str | None:
+        normalized = goal.lower()
+        tool_intents = set(self.executor.registry.get(tool_name).spec.intents)
+        if not tool_intents:
+            return None
+        for rule in INTENT_GUARD_RULES:
+            if any(token in normalized for token in rule.tokens) and not tool_intents.intersection(rule.allowed_intents):
+                return rule.reason
+        return None
 
     def _feature_flags(self) -> dict[str, bool | str]:
         return {
@@ -632,3 +755,7 @@ def truncate_text(value: str, max_chars: int) -> str:
 
 def observation_body(observation: dict[str, Any]) -> str:
     return str(observation.get("output") or observation.get("result") or observation.get("error") or "")
+
+
+def action_identity(tool: str, arguments: dict[str, Any]) -> str:
+    return json.dumps({"tool": tool, "arguments": arguments}, ensure_ascii=False, sort_keys=True, default=str)

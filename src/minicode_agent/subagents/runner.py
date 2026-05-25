@@ -4,16 +4,8 @@ from pathlib import Path
 import re
 
 from minicode_agent.subagents.types import SubagentRequest, SubagentResult, SubagentRole
-from minicode_agent.tools.readonly import GitDiffTool, GitStatusTool, ListFilesTool, ReadFileTool, SearchCodeTool
 from minicode_agent.tools.types import ToolContext
 from minicode_agent.trace import TraceStore
-
-
-ROLE_TOOLS = {
-    SubagentRole.EXPLORER: {"list_files", "read_file", "search_code", "git_status"},
-    SubagentRole.REVIEWER: {"git_diff", "read_file", "search_code", "git_status"},
-}
-ALL_SUBAGENT_TOOL_NAMES = {"git_diff", "git_status", "list_files", "read_file", "search_code", "spawn_subagent"}
 
 
 class SubagentRunner:
@@ -30,8 +22,9 @@ class SubagentRunner:
         self.parent_run_id = parent_run_id
 
     def run(self, request: SubagentRequest) -> SubagentResult:
-        allowed_tools = sorted(ROLE_TOOLS[request.role])
-        denied_tools = sorted(ALL_SUBAGENT_TOOL_NAMES - set(allowed_tools))
+        registry = create_limited_registry(request.role)
+        allowed_tools = [tool.spec.name for tool in registry.list()]
+        denied_tools = denied_subagent_tools(request.role)
         self._trace(
             "subagent_started",
             {
@@ -42,7 +35,6 @@ class SubagentRunner:
         )
         from minicode_agent.tools.executor import ToolExecutor
 
-        registry = create_limited_registry(ROLE_TOOLS[request.role])
         executor = ToolExecutor(registry, trace_store=self.trace_store, run_id=self.parent_run_id)
         context = ToolContext(workspace=self.workspace)
         findings: list[str] = []
@@ -85,20 +77,24 @@ class SubagentRunner:
         self.trace_store.append(self.parent_run_id, event_type, payload)
 
 
-def create_limited_registry(allowed_tools: set[str]):
-    from minicode_agent.tools.registry import ToolRegistry
+def create_limited_registry(role: SubagentRole):
+    from minicode_agent.tools.registry import ToolRegistry, create_default_registry
 
-    available = {
-        "list_files": ListFilesTool(),
-        "read_file": ReadFileTool(),
-        "search_code": SearchCodeTool(),
-        "git_status": GitStatusTool(),
-        "git_diff": GitDiffTool(),
-    }
     registry = ToolRegistry()
-    for name in sorted(allowed_tools):
-        registry.register(available[name])
+    for tool in create_default_registry(include_subagents=False).list():
+        if role.value in tool.spec.subagent_roles:
+            registry.register(tool)
     return registry
+
+
+def denied_subagent_tools(role: SubagentRole) -> list[str]:
+    from minicode_agent.tools.registry import create_default_registry
+
+    return [
+        tool.spec.name
+        for tool in create_default_registry(include_subagents=True).list()
+        if role.value not in tool.spec.subagent_roles
+    ]
 
 
 def planned_actions(request: SubagentRequest) -> list[tuple[str, dict]]:

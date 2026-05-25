@@ -2,7 +2,7 @@ from minicode_agent.tools.base import BaseTool, ToolError
 from minicode_agent.tools.readonly import GitDiffTool, GitStatusTool, ListFilesTool, ReadFileTool, SearchCodeTool
 from minicode_agent.tools.shell import RunShellTool, RunTestsTool
 from minicode_agent.tools.subagent import SpawnSubagentTool
-from minicode_agent.tools.write import EditFileTool, WriteFileTool
+from minicode_agent.tools.write import AppendFileTool, CreateFileTool, DeleteFileTool, EditFileTool, WriteFileTool
 
 
 class ToolRegistry:
@@ -31,6 +31,9 @@ def create_default_registry(include_subagents: bool = True) -> ToolRegistry:
     registry.register(ReadFileTool())
     registry.register(SearchCodeTool())
     registry.register(WriteFileTool())
+    registry.register(AppendFileTool())
+    registry.register(CreateFileTool())
+    registry.register(DeleteFileTool())
     registry.register(EditFileTool())
     registry.register(RunShellTool())
     registry.register(RunTestsTool())

@@ -375,6 +375,191 @@ def test_agent_loop_stops_after_approval_required_tool(tmp_path) -> None:
     assert len(model.messages) == 1
 
 
+def test_agent_loop_runs_approved_write_tool(tmp_path) -> None:
+    runtime = RuntimeContext.create(tmp_path, run_id="agent_model_approved_write_test")
+    model = MockModelClient(
+        [
+            """
+            {
+              "summary": "Write a note.",
+              "selected_skill": null,
+              "next_actions": ["Create notes.txt."],
+              "stop": false,
+              "final_answer": null,
+              "action": {"tool": "write_file", "arguments": {"path": "notes.txt", "content": "hello"}}
+            }
+            """,
+            """
+            {
+              "summary": "The file was written.",
+              "selected_skill": null,
+              "next_actions": [],
+              "stop": true,
+              "final_answer": "notes.txt written.",
+              "action": null
+            }
+            """,
+        ]
+    )
+    approvals: list[tuple[str, dict, str]] = []
+
+    def approve(tool: str, arguments: dict, reason: str) -> bool:
+        approvals.append((tool, arguments, reason))
+        return True
+
+    result = AgentLoop(runtime, "write notes.txt", model_client=model, approval_callback=approve).run()
+
+    assert result.state.current_phase == AgentPhase.DONE
+    assert (tmp_path / "notes.txt").read_text(encoding="utf-8") == "hello"
+    assert approvals == [("write_file", {"path": "notes.txt", "content": "hello"}, "Tool requires approval by its permission mode.")]
+
+
+def test_agent_loop_blocks_repeated_successful_write_file(tmp_path) -> None:
+    runtime = RuntimeContext.create(tmp_path, run_id="agent_model_duplicate_write_test")
+    repeated_write = """
+    {
+      "summary": "Write a note.",
+      "selected_skill": null,
+      "next_actions": ["Create notes.txt."],
+      "stop": false,
+      "final_answer": null,
+      "action": {"tool": "write_file", "arguments": {"path": "notes.txt", "content": "hello"}}
+    }
+    """
+    model = MockModelClient([repeated_write, repeated_write])
+    approval_count = 0
+
+    def approve(tool: str, arguments: dict, reason: str) -> bool:
+        nonlocal approval_count
+        approval_count += 1
+        return True
+
+    result = AgentLoop(runtime, "write notes.txt", model_client=model, approval_callback=approve).run()
+
+    assert result.state.current_phase == AgentPhase.DONE
+    assert result.state.metrics.tool_calls == 2
+    assert approval_count == 1
+    assert (tmp_path / "notes.txt").read_text(encoding="utf-8") == "hello"
+    action_results = [event for event in result.transcript if event["event"] == "action_result"]
+    assert [event["payload"]["tool"] for event in action_results] == ["write_file"]
+    repeated_blocks = [event for event in result.transcript if event["event"] == "repeated_action_blocked"]
+    assert repeated_blocks
+    assert repeated_blocks[0]["payload"]["tool"] == "write_file"
+
+
+def test_agent_loop_can_use_append_file_for_append_intent(tmp_path) -> None:
+    (tmp_path / "notes.txt").write_text("first\n", encoding="utf-8")
+    runtime = RuntimeContext.create(tmp_path, run_id="agent_model_append_file_test")
+    model = MockModelClient(
+        [
+            """
+            {
+              "summary": "Append a note.",
+              "selected_skill": null,
+              "next_actions": ["Append to notes.txt."],
+              "stop": false,
+              "final_answer": null,
+              "action": {"tool": "append_file", "arguments": {"path": "notes.txt", "content": "second\\n", "separator": "\\n"}}
+            }
+            """,
+            """
+            {
+              "summary": "The note was appended.",
+              "selected_skill": null,
+              "next_actions": [],
+              "stop": true,
+              "final_answer": "notes.txt appended.",
+              "action": null
+            }
+            """,
+        ]
+    )
+
+    result = AgentLoop(runtime, "追加一行到 notes.txt", model_client=model, approval_callback=lambda *_: True).run()
+
+    assert result.state.current_phase == AgentPhase.DONE
+    assert (tmp_path / "notes.txt").read_text(encoding="utf-8") == "first\nsecond\n"
+
+
+def test_agent_loop_blocks_write_file_for_append_intent(tmp_path) -> None:
+    (tmp_path / "notes.txt").write_text("first\n", encoding="utf-8")
+    runtime = RuntimeContext.create(tmp_path, run_id="agent_model_append_guard_test")
+    model = MockModelClient(
+        """
+        {
+          "summary": "Append a note.",
+          "selected_skill": null,
+          "next_actions": ["Append to notes.txt."],
+          "stop": false,
+          "final_answer": null,
+          "action": {"tool": "write_file", "arguments": {"path": "notes.txt", "content": "second\\n"}}
+        }
+        """
+    )
+
+    result = AgentLoop(runtime, "追加一行到 notes.txt", model_client=model, approval_callback=lambda *_: True).run()
+
+    assert result.state.current_phase == AgentPhase.FAILED
+    assert "append intent should use append_file" in result.state.task_state.failed_attempts[-1]
+    assert (tmp_path / "notes.txt").read_text(encoding="utf-8") == "first\n"
+
+
+def test_agent_loop_allows_edit_file_for_replace_intent(tmp_path) -> None:
+    (tmp_path / "notes.txt").write_text("old\n", encoding="utf-8")
+    runtime = RuntimeContext.create(tmp_path, run_id="agent_model_replace_guard_test")
+    model = MockModelClient(
+        [
+            """
+            {
+              "summary": "Replace text.",
+              "selected_skill": null,
+              "next_actions": ["Replace old with new."],
+              "stop": false,
+              "final_answer": null,
+              "action": {"tool": "edit_file", "arguments": {"path": "notes.txt", "old_text": "old", "new_text": "new"}}
+            }
+            """,
+            """
+            {
+              "summary": "The text was replaced.",
+              "selected_skill": null,
+              "next_actions": [],
+              "stop": true,
+              "final_answer": "notes.txt edited.",
+              "action": null
+            }
+            """,
+        ]
+    )
+
+    result = AgentLoop(runtime, "replace old in notes.txt", model_client=model, approval_callback=lambda *_: True).run()
+
+    assert result.state.current_phase == AgentPhase.DONE
+    assert (tmp_path / "notes.txt").read_text(encoding="utf-8") == "new\n"
+
+
+def test_agent_loop_respects_rejected_write_tool(tmp_path) -> None:
+    runtime = RuntimeContext.create(tmp_path, run_id="agent_model_rejected_write_test")
+    model = MockModelClient(
+        """
+        {
+          "summary": "Write a note.",
+          "selected_skill": null,
+          "next_actions": ["Create notes.txt."],
+          "stop": false,
+          "final_answer": null,
+          "action": {"tool": "write_file", "arguments": {"path": "notes.txt", "content": "hello"}}
+        }
+        """
+    )
+
+    result = AgentLoop(runtime, "write notes.txt", model_client=model, approval_callback=lambda *_: False).run()
+
+    assert result.state.current_phase == AgentPhase.FAILED
+    assert not (tmp_path / "notes.txt").exists()
+    assert "approval" in result.state.task_state.failed_attempts[-1]
+
+
 def test_agent_loop_records_model_planning_failure(tmp_path) -> None:
     (tmp_path / "README.md").write_text("# Demo\n", encoding="utf-8")
     runtime = RuntimeContext.create(tmp_path, run_id="agent_model_failure_test")
@@ -449,12 +634,13 @@ def test_agent_loop_model_can_call_multiple_readonly_tools(tmp_path) -> None:
     assert model_events[1].payload["observation_count"] == 1
 
 
-def test_agent_loop_model_stops_at_max_steps(tmp_path) -> None:
-    (tmp_path / "README.md").write_text("# Demo\n", encoding="utf-8")
-    runtime = RuntimeContext.create(tmp_path, run_id="agent_model_max_steps_test")
-    keep_reading = """
+def test_agent_loop_blocks_repeated_successful_read_file(tmp_path) -> None:
+    readme = "# Demo\n\n" + "content line\n" * 500
+    (tmp_path / "README.md").write_text(readme, encoding="utf-8")
+    runtime = RuntimeContext.create(tmp_path, run_id="agent_model_duplicate_tool_test")
+    repeated_read = """
     {
-      "summary": "Keep reading README.",
+      "summary": "Read README again.",
       "selected_skill": null,
       "next_actions": ["Read README.md."],
       "stop": false,
@@ -462,7 +648,52 @@ def test_agent_loop_model_stops_at_max_steps(tmp_path) -> None:
       "action": {"tool": "read_file", "arguments": {"path": "README.md"}}
     }
     """
-    model = MockModelClient([keep_reading, keep_reading])
+    model = MockModelClient([repeated_read, repeated_read])
+
+    result = AgentLoop(runtime, "读取 README.md", model_client=model).run()
+
+    assert result.state.current_phase == AgentPhase.DONE
+    assert result.state.metrics.tool_calls == 2
+    assert len(model.messages) == 2
+    action_results = [event for event in result.transcript if event["event"] == "action_result"]
+    assert [event["payload"]["tool"] for event in action_results] == ["read_file"]
+    assert action_results[0]["payload"]["truncated"]
+    assert len(action_results[0]["payload"]["output"]) < len(readme)
+    repeated_blocks = [event for event in result.transcript if event["event"] == "repeated_action_blocked"]
+    assert repeated_blocks
+    assert repeated_blocks[0]["payload"]["tool"] == "read_file"
+    assert result.state.task_state.decisions[0] == readme.strip()
+    assert "阻止重复执行" not in result.state.task_state.decisions[0]
+
+
+def test_agent_loop_model_stops_at_max_steps(tmp_path) -> None:
+    (tmp_path / "README.md").write_text("# Demo\n", encoding="utf-8")
+    (tmp_path / "notes.md").write_text("# Notes\n", encoding="utf-8")
+    runtime = RuntimeContext.create(tmp_path, run_id="agent_model_max_steps_test")
+    model = MockModelClient(
+        [
+            """
+            {
+              "summary": "Read README.",
+              "selected_skill": null,
+              "next_actions": ["Read README.md."],
+              "stop": false,
+              "final_answer": null,
+              "action": {"tool": "read_file", "arguments": {"path": "README.md"}}
+            }
+            """,
+            """
+            {
+              "summary": "Read notes.",
+              "selected_skill": null,
+              "next_actions": ["Read notes.md."],
+              "stop": false,
+              "final_answer": null,
+              "action": {"tool": "read_file", "arguments": {"path": "notes.md"}}
+            }
+            """,
+        ]
+    )
 
     result = AgentLoop(runtime, "loop forever", max_steps=2, model_client=model).run()
 

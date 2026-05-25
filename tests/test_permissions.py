@@ -7,7 +7,7 @@ from minicode_agent.permissions.policy import PathSandbox, PermissionPolicy
 from minicode_agent.tools.base import BaseTool
 from minicode_agent.tools.executor import ToolExecutor
 from minicode_agent.tools.registry import ToolRegistry, create_default_registry
-from minicode_agent.tools.types import PermissionMode, RiskLevel, ToolContext, ToolSpec
+from minicode_agent.tools.types import DuplicatePolicy, PermissionMode, RiskLevel, ToolContext, ToolIntent, ToolSpec, ToolStateEffect
 
 
 class MediumRiskTool(BaseTool):
@@ -87,6 +87,46 @@ def test_permission_policy_respects_explicit_deny(tmp_path) -> None:
     decision = PermissionPolicy().decide(tool, workspace=tmp_path)
 
     assert decision.mode == PermissionMode.DENY
+
+
+def test_default_tool_duplicate_policies_are_declared() -> None:
+    registry = create_default_registry()
+    block_identical = {
+        "append_file",
+        "create_file",
+        "delete_file",
+        "edit_file",
+        "git_diff",
+        "git_status",
+        "list_files",
+        "read_file",
+        "search_code",
+        "write_file",
+    }
+
+    for tool in registry.list():
+        expected = DuplicatePolicy.BLOCK_IDENTICAL_SUCCESS if tool.spec.name in block_identical else DuplicatePolicy.ALLOW
+        assert tool.spec.duplicate_policy == expected
+
+
+def test_default_tool_cross_cutting_policies_are_declared() -> None:
+    registry = create_default_registry()
+
+    assert ToolStateEffect.MARKS_MODIFIED_FILE in registry.get("write_file").spec.state_effects
+    assert ToolStateEffect.MARKS_MODIFIED_FILE in registry.get("append_file").spec.state_effects
+    assert ToolStateEffect.MARKS_MODIFIED_FILE in registry.get("create_file").spec.state_effects
+    assert ToolStateEffect.MARKS_MODIFIED_FILE in registry.get("delete_file").spec.state_effects
+    assert ToolStateEffect.MARKS_MODIFIED_FILE in registry.get("edit_file").spec.state_effects
+    assert ToolStateEffect.RECORDS_PATH_FACT in registry.get("read_file").spec.state_effects
+    assert ToolIntent.FILE_OVERWRITE in registry.get("write_file").spec.intents
+    assert ToolIntent.FILE_APPEND in registry.get("append_file").spec.intents
+    assert ToolIntent.FILE_CREATE in registry.get("create_file").spec.intents
+    assert ToolIntent.FILE_DELETE in registry.get("delete_file").spec.intents
+    assert ToolIntent.FILE_EDIT in registry.get("edit_file").spec.intents
+    assert registry.get("read_file").spec.capture_full_output is True
+    assert registry.get("spawn_subagent").spec.counts_as_subagent_call is True
+    assert registry.get("read_file").spec.subagent_roles == ("explorer", "reviewer")
+    assert registry.get("write_file").spec.subagent_roles == ()
 
 
 def test_executor_denies_workspace_escape_before_tool_runs(tmp_path) -> None:

@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from minicode_agent.tools.base import BaseTool, ToolError
-from minicode_agent.tools.types import PermissionMode, RiskLevel, ToolContext, ToolSpec
+from minicode_agent.tools.types import DuplicatePolicy, PermissionMode, RiskLevel, ToolContext, ToolSpec, ToolStateEffect
 
 DEFAULT_EXCLUDES = {
     ".git",
@@ -44,6 +44,8 @@ class ListFilesTool(BaseTool):
         description="List files under the workspace or a relative directory.",
         risk_level=RiskLevel.SAFE,
         permission=PermissionMode.ALLOW,
+        duplicate_policy=DuplicatePolicy.BLOCK_IDENTICAL_SUCCESS,
+        subagent_roles=("explorer",),
     )
 
     def _run(self, context: ToolContext, arguments: dict[str, Any]) -> tuple[str, dict[str, Any]]:
@@ -76,6 +78,10 @@ class ReadFileTool(BaseTool):
         description="Read a UTF-8 text file inside the workspace.",
         risk_level=RiskLevel.SAFE,
         permission=PermissionMode.ALLOW,
+        duplicate_policy=DuplicatePolicy.BLOCK_IDENTICAL_SUCCESS,
+        state_effects=(ToolStateEffect.RECORDS_PATH_FACT,),
+        capture_full_output=True,
+        subagent_roles=("explorer", "reviewer"),
     )
 
     def _run(self, context: ToolContext, arguments: dict[str, Any]) -> tuple[str, dict[str, Any]]:
@@ -102,6 +108,9 @@ class SearchCodeTool(BaseTool):
         description="Search text in files under the workspace.",
         risk_level=RiskLevel.SAFE,
         permission=PermissionMode.ALLOW,
+        duplicate_policy=DuplicatePolicy.BLOCK_IDENTICAL_SUCCESS,
+        state_effects=(ToolStateEffect.RECORDS_PATH_FACT,),
+        subagent_roles=("explorer", "reviewer"),
     )
 
     def _run(self, context: ToolContext, arguments: dict[str, Any]) -> tuple[str, dict[str, Any]]:
@@ -135,6 +144,9 @@ class GitStatusTool(BaseTool):
         description="Return short git status for the workspace.",
         risk_level=RiskLevel.LOW,
         permission=PermissionMode.ALLOW,
+        duplicate_policy=DuplicatePolicy.BLOCK_IDENTICAL_SUCCESS,
+        state_effects=(ToolStateEffect.RECORDS_OUTPUT_FACT,),
+        subagent_roles=("explorer", "reviewer"),
     )
 
     def _run(self, context: ToolContext, arguments: dict[str, Any]) -> tuple[str, dict[str, Any]]:
@@ -147,6 +159,9 @@ class GitDiffTool(BaseTool):
         description="Return git diff for the workspace.",
         risk_level=RiskLevel.LOW,
         permission=PermissionMode.ALLOW,
+        duplicate_policy=DuplicatePolicy.BLOCK_IDENTICAL_SUCCESS,
+        state_effects=(ToolStateEffect.RECORDS_OUTPUT_FACT,),
+        subagent_roles=("reviewer",),
     )
 
     def _run(self, context: ToolContext, arguments: dict[str, Any]) -> tuple[str, dict[str, Any]]:

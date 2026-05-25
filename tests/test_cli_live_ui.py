@@ -4,7 +4,17 @@ from rich.console import Console
 from typer.testing import CliRunner
 
 from minicode_agent.cli.app import app
-from minicode_agent.cli.live_ui import ChatSession, ChatTurn, format_stream_event, render_bottom_panel, render_conversation_area, render_top_panel, summarize_turn, wrap_text
+from minicode_agent.cli.live_ui import (
+    ChatSession,
+    ChatTurn,
+    build_approval_callback,
+    format_stream_event,
+    render_bottom_panel,
+    render_conversation_area,
+    render_top_panel,
+    summarize_turn,
+    wrap_text,
+)
 from minicode_agent.core.state import AgentPhase, AgentState, TaskState
 
 
@@ -88,6 +98,24 @@ def test_format_stream_event_shows_phase_and_tool() -> None:
     assert "read_file" in tool.plain
 
 
+def test_approval_prompt_only_asks_for_yes_or_no(monkeypatch) -> None:
+    console = Console(record=True, width=120)
+    monkeypatch.setattr(console, "input", lambda prompt: (console.print(prompt), "y")[1])
+
+    approved = build_approval_callback(console)(
+        "write_file",
+        {"path": "secret.txt", "content": "hidden content"},
+        "Tool requires approval by its permission mode.",
+    )
+
+    text = console.export_text()
+    assert approved is True
+    assert "是否批准？[y/N]" in text
+    assert "write_file" not in text
+    assert "secret.txt" not in text
+    assert "hidden content" not in text
+
+
 def test_summarize_turn_prefers_direct_final_answer() -> None:
     class Result:
         transcript = [
@@ -108,6 +136,22 @@ def test_summarize_turn_prefers_direct_final_answer() -> None:
         )
 
     assert summarize_turn(Result()) == "你好，我是 MiniCode。"
+
+
+def test_summarize_turn_preserves_full_decision_text() -> None:
+    long_answer = "# Demo\n\n" + "content line\n" * 80
+
+    class Result:
+        transcript = []
+        state = AgentState(
+            run_id="run_1",
+            workspace=".",
+            user_goal="read README",
+            current_phase=AgentPhase.DONE,
+            task_state=TaskState(goal="read README", decisions=[long_answer]),
+        )
+
+    assert summarize_turn(Result()) == long_answer
 
 
 def test_direct_chat_query_is_answered_without_agent_loop(tmp_path) -> None:

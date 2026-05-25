@@ -5,6 +5,8 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from minicode_agent.core.state import TaskState
+from minicode_agent.tools.registry import create_default_registry
+from minicode_agent.tools.types import ToolStateEffect
 
 
 class CompressionResult(BaseModel):
@@ -24,6 +26,10 @@ class TaskStateCompressor:
 
     def __init__(self, max_summary_chars: int = 1200) -> None:
         self.max_summary_chars = max_summary_chars
+        self.tool_effects = {
+            tool.spec.name: set(tool.spec.state_effects)
+            for tool in create_default_registry().list()
+        }
 
     def compress(
         self,
@@ -43,12 +49,13 @@ class TaskStateCompressor:
             ok = bool(observation.get("ok", observation.get("payload", {}).get("ok", True)))
             result = str(observation.get("result") or observation.get("output") or observation.get("error") or "")
             path = observation_path(observation)
+            effects = self.tool_effects.get(tool, set())
             if path and path not in files_relevant:
                 files_relevant.append(path)
-            if path and tool in {"write_file", "edit_file"} and path not in files_modified:
+            if path and ToolStateEffect.MARKS_MODIFIED_FILE in effects and path not in files_modified:
                 files_modified.append(path)
             if ok and result:
-                fact = extract_known_fact(tool, result, path)
+                fact = extract_known_fact(tool, result, path, effects)
                 if fact and fact not in known_facts:
                     known_facts.append(fact)
             if not ok:
@@ -132,14 +139,15 @@ def observation_turns(observations: list[dict[str, Any]]) -> list[int]:
     return turns
 
 
-def extract_known_fact(tool: str, result: str, path: str | None) -> str | None:
+def extract_known_fact(tool: str, result: str, path: str | None, effects: set[ToolStateEffect] | None = None) -> str | None:
+    effects = effects or set()
     text = " ".join(result.split())
     lowered = text.lower()
-    if tool in {"read_file", "search_code"} and path:
+    if ToolStateEffect.RECORDS_PATH_FACT in effects and path:
         return f"{tool} read relevant path: {path}"
     if "exit code" in lowered or "passed" in lowered or "failed" in lowered:
         return f"{tool}: {truncate_inline(text, 180)}"
-    if tool in {"git_status", "git_diff"}:
+    if ToolStateEffect.RECORDS_OUTPUT_FACT in effects:
         return f"{tool}: {truncate_inline(text, 180)}"
     return None
 

@@ -151,6 +151,8 @@ def build_model_client(config: MiniCodeConfig):
 
 
 def run_turn(session: ChatSession, task: str, config: MiniCodeConfig, model_client) -> ChatTurn:
+    if is_direct_chat_query(task):
+        return build_direct_chat_turn(session, task)
     runtime = RuntimeContext.create(config.workspace, run_kind="chat")
     console = Console()
     stream = ChatRunStream(console)
@@ -180,6 +182,65 @@ def run_turn(session: ChatSession, task: str, config: MiniCodeConfig, model_clie
         trace_path=runtime.trace_store.storage_path,
         memory_mode=session.memory_reflection_mode,
     )
+
+
+def is_direct_chat_query(task: str) -> bool:
+    normalized = task.strip().lower()
+    if not normalized:
+        return False
+    direct_patterns = (
+        "你是谁",
+        "你是什么",
+        "你有什么工具",
+        "你能做什么",
+        "你会什么",
+        "你能帮我什么",
+        "你好",
+        "您好",
+        "说中文",
+        "用中文",
+        "你有啥工具",
+        "有什么工具",
+        "tool list",
+        "what tools do you have",
+        "what are your tools",
+        "what can you do",
+        "who are you",
+        "capabilities",
+        "capability",
+    )
+    if any(pattern in normalized for pattern in direct_patterns):
+        return True
+    return False
+
+
+def build_direct_chat_turn(session: ChatSession, task: str) -> ChatTurn:
+    prompt = task.strip()
+    summary = direct_chat_reply(prompt)
+    return ChatTurn(
+        prompt=prompt,
+        run_id="chat_direct",
+        final_phase="done",
+        tool_calls=0,
+        selected_skills=[],
+        summary=summary,
+        failure_reason=None,
+        trace_backend="direct",
+        trace_path=None,
+        memory_mode=session.memory_reflection_mode,
+    )
+
+
+def direct_chat_reply(task: str) -> str:
+    normalized = task.strip()
+    lowered = normalized.lower()
+    if any(phrase in normalized for phrase in ("你是谁", "你是什么", "who are you")):
+        return "我是 MiniCode，一个本地编码代理，可以帮你看代码、改代码、跑测试、查问题和整理项目。"
+    if any(phrase in normalized for phrase in ("你有什么工具", "你能做什么", "what can you do", "help")):
+        return "我可以读写文件、搜索代码、运行命令、跑测试、查看 git 状态和差异，也可以按需调用子代理。"
+    if "tool" in lowered or "工具" in normalized:
+        return "我有文件读取、代码搜索、写入编辑、shell 命令、测试运行、git 状态/差异和子代理这些工具。"
+    return "我是 MiniCode，可以帮你处理代码、测试、审查和项目整理。"
 
 
 class ChatRunStream:
@@ -425,4 +486,3 @@ def summarize_turn(result) -> str:
 def horizontal_rule(width: int) -> Text:
     rule_width = max(20, width - 1)
     return Text("─" * rule_width, style="#8f8b84")
-

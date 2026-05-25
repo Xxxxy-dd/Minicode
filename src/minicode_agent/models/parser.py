@@ -44,15 +44,15 @@ def parse_model_plan(content: str) -> ModelPlan:
     if not isinstance(stop, bool):
         raise ValueError("Model response field 'stop' must be a boolean.")
 
-    final_answer = payload.get("final_answer")
-    if final_answer is not None and not isinstance(final_answer, str):
-        raise ValueError("Model response field 'final_answer' must be a string or null.")
-    summary = optional_text(payload.get("summary")) or optional_text(final_answer) or "Model completed the turn."
+    # Be tolerant when the model emits a malformed final_answer field; keep the
+    # turn alive and fall back to the summary or the default completion text.
+    final_answer = optional_text(payload.get("final_answer"))
+    summary = optional_text(payload.get("summary")) or final_answer or "Model completed the turn."
     if not stop and payload.get("action") is None and direct_answer_payload(payload):
         stop = True
-        final_answer = optional_text(final_answer) or summary
+        final_answer = final_answer or summary
     next_actions = optional_string_list(payload.get("next_actions")) or default_next_actions(stop)
-    if stop and (not isinstance(final_answer, str) or not final_answer.strip()):
+    if stop and not final_answer:
         final_answer = summary
 
     action = _parse_action(payload.get("action"), stop)

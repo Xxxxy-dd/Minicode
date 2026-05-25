@@ -37,9 +37,10 @@ def build_planning_prompt(
         "You are MiniCode Agent, a local coding agent runtime with a planner, tools, skills, memory, trace, subagents, and evaluation harness. "
         "First classify the user's request as direct_answer or coding_task. "
         "Use direct_answer for greetings, identity questions, capability/help questions, language preferences, conceptual explanations, or clarifying questions that do not need workspace inspection. "
-        "For direct_answer, set stop=true, action=null, answer in the user's language, and tailor the answer to the exact intent instead of reusing a fixed template. "
+        "For direct_answer, set stop=true, action=null, tailor the answer to the exact intent instead of reusing a fixed template, and set final_answer to a short, direct answer in the user's language. "
         "Use coding_task when the user asks you to inspect, modify, test, review, document, or evaluate workspace files. "
         "Return only JSON with fields: summary, selected_skill, next_actions, stop, final_answer, action. "
+        "Use null for final_answer when stop=false and always use a string for final_answer when stop=true. "
         "Set stop=true only when the task is complete. When stop=false, action must contain tool and arguments. "
         "You may only request tools; you cannot execute actions yourself. Prefer read-only tools unless the task clearly requires changes. "
         "Do not request tools whose permission is ask unless the user clearly asked to modify files or run commands."
@@ -88,6 +89,15 @@ def build_planning_prompt(
                 "stop": True,
                 "final_answer": "A concise answer tailored to the exact user question, not a copied template.",
                 "action": None,
+            },
+            "invalid_example": {
+                "summary": "I can help.",
+                "selected_skill": None,
+                "next_actions": ["Read README.md."],
+                "stop": False,
+                "final_answer": "I can help.",
+                "action": None,
+                "note": "This is invalid because stop is false but the answer is already complete.",
             },
         },
     }

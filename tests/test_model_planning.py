@@ -29,6 +29,25 @@ def test_parse_model_plan_requires_json_object() -> None:
     assert plan.action is None
 
 
+def test_parse_model_plan_recovers_from_non_string_final_answer() -> None:
+    plan = parse_model_plan(
+        """
+        {
+          "summary": "I can answer directly.",
+          "selected_skill": null,
+          "next_actions": ["Report the final answer."],
+          "stop": true,
+          "final_answer": {"text": "I am MiniCode Agent."},
+          "action": null
+        }
+        """
+    )
+
+    assert plan.stop
+    assert plan.final_answer == "I can answer directly."
+    assert plan.action is None
+
+
 def test_parse_model_plan_extracts_markdown_json() -> None:
     plan = parse_model_plan(
         """
@@ -208,6 +227,27 @@ def test_parse_model_plan_requires_final_answer_when_stopping() -> None:
     plan = parse_model_plan('{"summary":"x","next_actions":["report"],"stop":true,"final_answer":null,"action":null}')
 
     assert plan.final_answer == "x"
+
+
+def test_agent_loop_recovers_from_bad_direct_answer_payload(tmp_path) -> None:
+    runtime = RuntimeContext.create(tmp_path, run_id="agent_model_bad_direct_answer_test")
+    model = MockModelClient(
+        """
+        {
+          "summary": "I can answer directly.",
+          "selected_skill": null,
+          "next_actions": ["Report the final answer."],
+          "stop": true,
+          "final_answer": {"text": "I am MiniCode Agent."},
+          "action": null
+        }
+        """
+    )
+
+    result = AgentLoop(runtime, "你是谁", model_client=model).run()
+
+    assert result.state.current_phase == AgentPhase.DONE
+    assert "I can answer directly." in result.state.task_state.decisions
 
 
 def test_build_planning_prompt_includes_tools_and_limits_files() -> None:

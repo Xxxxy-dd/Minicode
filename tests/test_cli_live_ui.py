@@ -108,3 +108,20 @@ def test_summarize_turn_prefers_direct_final_answer() -> None:
         )
 
     assert summarize_turn(Result()) == "你好，我是 MiniCode。"
+
+
+def test_direct_chat_query_is_answered_without_agent_loop(tmp_path) -> None:
+    result = CliRunner().invoke(app, ["chat", "你有什么工具", "--workspace", str(tmp_path), "--no-model", "--preview"])
+
+    assert result.exit_code == 0, result.output
+    assert "我可以读写文件" in result.output or "我有文件读取" in result.output
+    assert "phase init" not in result.output
+
+
+def test_chat_task_still_runs_agent_loop_for_workspace_work(tmp_path) -> None:
+    (tmp_path / "README.md").write_text("# Demo\n", encoding="utf-8")
+    result = CliRunner().invoke(app, ["chat", "inspect project", "--workspace", str(tmp_path), "--no-model", "--preview"])
+
+    assert result.exit_code == 0, result.output
+    assert "phase init" in result.output
+    assert "MiniCode Agent" in result.output

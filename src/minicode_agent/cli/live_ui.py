@@ -127,8 +127,12 @@ def run_chat_session(
     if preview:
         render_chat_screen(session)
         return
+    render_chat_intro(session)
+    if session.notices:
+        render_latest_notice(session)
+    if session.turns:
+        render_latest_turn(session)
     while True:
-        render_chat_screen(session)
         command = input_bar()
         if not command:
             continue
@@ -138,8 +142,10 @@ def run_chat_session(
 
                 Console().clear()
                 return
+            render_latest_notice(session)
             continue
         session.turns.append(run_turn(session, command, config, model_client))
+        render_latest_turn(session)
 
 
 def build_model_client(config: MiniCodeConfig):
@@ -332,6 +338,32 @@ def render_chat_screen(session: ChatSession) -> None:
     console.print(bottom)
 
 
+def render_chat_intro(session: ChatSession, console: Console | None = None) -> None:
+    console = console or Console()
+    console.clear()
+    console.print(render_top_panel(session))
+    console.print()
+    console.print(render_bottom_panel(session))
+    console.print()
+
+
+def render_latest_notice(session: ChatSession, console: Console | None = None) -> None:
+    if not session.notices:
+        return
+    console = console or Console()
+    console.print(render_system_notice(session.notices[-1]))
+    console.print()
+
+
+def render_latest_turn(session: ChatSession, console: Console | None = None) -> None:
+    if not session.turns:
+        return
+    console = console or Console()
+    for block in render_turn_dialogue(session.turns[-1]):
+        console.print(block)
+    console.print()
+
+
 def render_top_panel(session: ChatSession) -> Panel:
     left = render_left_column(session)
     right = render_right_column(session)
@@ -414,8 +446,6 @@ def render_rule(label: str, color: str) -> Text:
 
 def render_turn_summary(turn: ChatTurn) -> Text:
     text = Text()
-    text.append(f"phase: {turn.final_phase}   tools: {turn.tool_calls}   ", style="#efe8dd")
-    text.append(f"skills: {', '.join(turn.selected_skills) or '(none)'}\n", style="#cfc7b9")
     text.append(turn.summary, style="#efe8dd")
     if turn.failure_reason:
         text.append(f"\nfailure: {turn.failure_reason}", style="bold #ffb3b3")
@@ -452,13 +482,8 @@ def render_bottom_panel(session: ChatSession) -> Panel:
 
 
 def input_bar() -> str:
-    from rich.console import Console
-
     console = Console()
-    rule = horizontal_rule(console.size.width)
-    console.print(rule)
     value = console.input("> ").strip()
-    console.print(rule)
     return value
 
 

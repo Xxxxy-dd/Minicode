@@ -9,8 +9,10 @@ from minicode_agent.cli.live_ui import (
     ChatTurn,
     build_approval_callback,
     format_stream_event,
+    input_bar,
     render_bottom_panel,
     render_conversation_area,
+    render_latest_turn,
     render_top_panel,
     summarize_turn,
     wrap_text,
@@ -72,6 +74,41 @@ def test_chat_preview_renders_a_full_screen() -> None:
     assert "No messages yet" in result.output
 
 
+def test_latest_turn_render_does_not_repeat_top_card() -> None:
+    session = ChatSession(
+        workspace=Path("."),
+        model_name=None,
+        model_base_url="https://api.openai.com/v1",
+        no_model=True,
+        llm_rerank=False,
+        memory_reflection_mode="deterministic",
+        turns=[
+            ChatTurn(
+                prompt="inspect project",
+                run_id="run_1",
+                final_phase="done",
+                tool_calls=2,
+                selected_skills=[],
+                summary="Inspected README.",
+            )
+        ],
+    )
+
+    console = Console(record=True, width=120)
+    render_latest_turn(session, console)
+    text = console.export_text()
+
+    assert "USER" in text
+    assert "MINICODE" in text
+    assert "inspect project" in text
+    assert "Inspected README." in text
+    assert "MiniCode Agent" not in text
+    assert "Recent Activity" not in text
+    assert "phase:" not in text
+    assert "tools:" not in text
+    assert "skills:" not in text
+
+
 def test_help_command_shows_a_system_notice() -> None:
     result = CliRunner().invoke(app, ["chat", "/help", "--workspace", ".", "--no-model", "--preview"])
 
@@ -86,6 +123,17 @@ def test_interactive_input_bar_has_focus_rules() -> None:
     assert result.exit_code == 0, result.output
     assert "> " in result.output
     assert "? for shortcuts" not in result.output
+
+
+def test_input_bar_does_not_render_extra_rules(monkeypatch) -> None:
+    console = Console(record=True, width=40)
+    monkeypatch.setattr("minicode_agent.cli.live_ui.Console", lambda: console)
+    monkeypatch.setattr(console, "input", lambda prompt: (console.print(prompt), "hello")[1])
+
+    assert input_bar() == "hello"
+    text = console.export_text()
+    assert "> " in text
+    assert "─" not in text
 
 
 def test_format_stream_event_shows_phase_and_tool() -> None:

@@ -256,7 +256,18 @@ def test_direct_chat_query_is_answered_without_agent_loop(tmp_path) -> None:
     result = CliRunner().invoke(app, ["chat", "你有什么工具", "--workspace", str(tmp_path), "--no-model", "--preview"])
 
     assert result.exit_code == 0, result.output
-    assert "我可以读写文件" in result.output or "我有文件读取" in result.output
+    assert "当前工具注册表" in result.output
+    assert "read_file" in result.output
+    assert "write_file" in result.output
+    assert "phase init" not in result.output
+
+
+def test_direct_chat_uses_shared_capability_patterns(tmp_path) -> None:
+    result = CliRunner().invoke(app, ["chat", "what tools do you have", "--workspace", str(tmp_path), "--no-model", "--preview"])
+
+    assert result.exit_code == 0, result.output
+    assert "run_shell" in result.output
+    assert "工具" in result.output
     assert "phase init" not in result.output
 
 

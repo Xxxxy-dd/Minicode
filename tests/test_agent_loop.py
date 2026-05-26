@@ -1,6 +1,7 @@
 from typer.testing import CliRunner
 
 from minicode_agent.agent import AgentLoop
+from minicode_agent.agent.planner import choose_entry_context_file
 from minicode_agent.cli.app import app
 from minicode_agent.core.state import AgentPhase
 from minicode_agent.runtime import RuntimeContext
@@ -30,6 +31,24 @@ def test_agent_loop_falls_back_to_list_files_without_readme(tmp_path) -> None:
 
     assert result.state.current_phase == AgentPhase.DONE
     assert result.state.metrics.tool_calls == 2
+
+
+def test_agent_loop_reads_common_entry_file_without_readme(tmp_path) -> None:
+    (tmp_path / "pyproject.toml").write_text("[project]\nname = 'demo'\n", encoding="utf-8")
+    runtime = RuntimeContext.create(tmp_path, run_id="agent_entry_file_test")
+
+    result = AgentLoop(runtime, "inspect project").run()
+
+    assert result.state.current_phase == AgentPhase.DONE
+    action_results = [event["payload"] for event in result.transcript if event["event"] == "action_result"]
+    assert action_results[0]["tool"] == "read_file"
+    assert "pyproject.toml" in action_results[0]["metadata"].get("path", "")
+
+
+def test_choose_entry_context_file_prefers_common_project_files() -> None:
+    assert choose_entry_context_file(["src/app.py", "pyproject.toml"]) == "pyproject.toml"
+    assert choose_entry_context_file(["docs/readme.txt", "src/app.py"]) == "docs/readme.txt"
+    assert choose_entry_context_file(["src/app.py"]) is None
 
 
 def test_cli_run_executes_agent_loop(tmp_path) -> None:
@@ -95,6 +114,7 @@ def test_agent_loop_records_skill_route_reasons(tmp_path) -> None:
     skill_events = [event for event in result.transcript if event["event"] == "skill_selected"]
     assert skill_events
     assert skill_events[0]["payload"]["reasons"]["code-review"]
+    assert "debug_summary" in skill_events[0]["payload"]
     trace_events = runtime.trace_store.list_events("agent_skill_route_test")
     traced_skill = [event for event in trace_events if event.event_type == "skill_selected"]
     assert traced_skill[0].payload["candidates"][0]["name"] == "code-review"

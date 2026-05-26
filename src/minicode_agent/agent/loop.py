@@ -5,14 +5,15 @@ from typing import Any, Callable
 from minicode_agent.config import normalize_memory_reflection_mode
 from minicode_agent.context import TaskStateCompressor
 from minicode_agent.core.state import AgentPhase, AgentState, RunMetrics, TaskState
-from minicode_agent.agent.planner import ModelDecision, ModelDrivenPlanner, PlannedAction, RuleBasedPlanner
+from minicode_agent.agent.planner import ModelDecision, ModelDrivenPlanner, PlannedAction, RuleBasedPlanner, choose_entry_context_file
+from minicode_agent.intent import tool_intent_mismatch_reason
 from minicode_agent.memory import DeterministicReflectionEngine, LLMReflectionEngine, MemoryRecord, MemoryReflectionResult
 from minicode_agent.models import ModelClient
 from minicode_agent.runtime import RuntimeContext
 from minicode_agent.skills import SkillDefinition, SkillError, SkillRouter, default_skill_registry
 from minicode_agent.tools.executor import ToolExecutor
 from minicode_agent.tools.registry import create_default_registry
-from minicode_agent.tools.types import DuplicatePolicy, ToolContext, ToolIntent, ToolObservation
+from minicode_agent.tools.types import DuplicatePolicy, ToolContext, ToolObservation
 
 
 MAX_OBSERVATION_CHARS = 4000
@@ -23,37 +24,6 @@ TOTAL_HISTORY_COMPRESSION_CHARS = 8000
 class AgentRunResult:
     state: AgentState
     transcript: list[dict[str, Any]]
-
-
-@dataclass(frozen=True)
-class IntentGuardRule:
-    tokens: tuple[str, ...]
-    allowed_intents: tuple[ToolIntent, ...]
-    reason: str
-
-
-INTENT_GUARD_RULES = (
-    IntentGuardRule(
-        tokens=("追加", "append", "continue", "继续写", "继续"),
-        allowed_intents=(ToolIntent.FILE_APPEND,),
-        reason="append intent should use append_file",
-    ),
-    IntentGuardRule(
-        tokens=("覆盖", "overwrite", "replace", "重写", "改写"),
-        allowed_intents=(ToolIntent.FILE_OVERWRITE, ToolIntent.FILE_EDIT),
-        reason="overwrite intent should use write_file or edit_file",
-    ),
-    IntentGuardRule(
-        tokens=("删除", "delete", "remove", "移除"),
-        allowed_intents=(ToolIntent.FILE_DELETE,),
-        reason="delete intent should use delete_file",
-    ),
-    IntentGuardRule(
-        tokens=("新建", "创建", "create", "new file"),
-        allowed_intents=(ToolIntent.FILE_CREATE,),
-        reason="create intent should use create_file or write_file",
-    ),
-)
 
 
 ApprovalCallback = Callable[[str, dict[str, Any], str], bool]
@@ -191,9 +161,12 @@ class AgentLoop:
                 "candidates": self.state.skill_candidates,
                 "reasons": self.state.skill_route_reasons,
                 "unselected_reasons": route_result.unselected_reasons if self.enable_skills else {},
+                "debug_summary": route_result.debug_summary if self.enable_skills else "skills disabled",
+                "no_match_reason": route_result.no_match_reason if self.enable_skills else None,
                 "rerank_used": route_result.rerank_used if self.enable_skills else False,
                 "rerank_fallback": route_result.rerank_fallback if self.enable_skills else False,
                 "rerank_reason": route_result.rerank_reason if self.enable_skills else None,
+                "rerank_skipped_reason": route_result.rerank_skipped_reason if self.enable_skills else None,
             },
         )
 
@@ -512,11 +485,12 @@ class AgentLoop:
         self.state.task_state.next_actions = self.rule_planner.plan_steps(self.state.user_goal)
         planned = self.rule_planner.next_action(self.state.user_goal, known_files)
         if planned.tool == "spawn_subagent" and not self.enable_subagents:
-            if "README.md" in known_files:
+            entry_file = choose_entry_context_file(known_files)
+            if entry_file:
                 return PlannedAction(
                     tool="read_file",
-                    arguments={"path": "README.md"},
-                    description="Inspect README.md because subagents are disabled by the eval config.",
+                    arguments={"path": entry_file},
+                    description=f"Inspect {entry_file} because subagents are disabled by the eval config.",
                 )
             return PlannedAction(
                 tool="list_files",
@@ -702,14 +676,8 @@ class AgentLoop:
         return self.approval_callback(name, arguments, decision.reason)
 
     def _tool_intent_mismatch_reason(self, goal: str, tool_name: str) -> str | None:
-        normalized = goal.lower()
         tool_intents = set(self.executor.registry.get(tool_name).spec.intents)
-        if not tool_intents:
-            return None
-        for rule in INTENT_GUARD_RULES:
-            if any(token in normalized for token in rule.tokens) and not tool_intents.intersection(rule.allowed_intents):
-                return rule.reason
-        return None
+        return tool_intent_mismatch_reason(goal, tool_intents)
 
     def _feature_flags(self) -> dict[str, bool | str]:
         return {

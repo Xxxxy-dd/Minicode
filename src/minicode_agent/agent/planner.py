@@ -9,6 +9,17 @@ from minicode_agent.skills import SkillDefinition, SkillRouter
 from minicode_agent.trace.store import TraceStore
 from minicode_agent.tools.registry import ToolRegistry
 
+ENTRY_CONTEXT_FILES = (
+    "README.md",
+    "README.rst",
+    "README.txt",
+    "pyproject.toml",
+    "package.json",
+    "setup.py",
+    "Cargo.toml",
+    "go.mod",
+)
+
 
 @dataclass(frozen=True)
 class PlannedAction:
@@ -56,16 +67,17 @@ class RuleBasedPlanner:
                 arguments={"role": "reviewer", "task": goal, "max_steps": 2},
                 description="Use the bounded reviewer subagent to inspect the current diff.",
             )
-        if "README.md" in known_files:
+        entry_file = choose_entry_context_file(known_files)
+        if entry_file:
             return PlannedAction(
                 tool="read_file",
-                arguments={"path": "README.md"},
-                description="Inspect README.md as a safe first context read.",
+                arguments={"path": entry_file},
+                description=f"Inspect {entry_file} as a safe first context read.",
             )
         return PlannedAction(
             tool="list_files",
             arguments={},
-            description="List workspace files because README.md is not present.",
+            description="List workspace files because no common entry context file is present.",
         )
 
 
@@ -168,3 +180,15 @@ class ModelDrivenPlanner:
         if self.trace_store is None or self.run_id is None:
             return
         self.trace_store.append(self.run_id, event_type, payload)
+
+
+def choose_entry_context_file(known_files: list[str]) -> str | None:
+    known = set(known_files)
+    for candidate in ENTRY_CONTEXT_FILES:
+        if candidate in known:
+            return candidate
+    for path in known_files:
+        name = path.rsplit("/", 1)[-1].lower()
+        if name.startswith("readme."):
+            return path
+    return None

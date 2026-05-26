@@ -189,6 +189,7 @@ def test_parse_model_plan_allows_direct_answer_intents_without_tool(summary: str
         "调用工具读取 README。",
         "搜索项目中的 parser。",
         "检查项目结构。",
+        "列出项目文件。",
     ],
 )
 def test_parse_model_plan_rejects_tool_intent_without_action(next_action: str) -> None:

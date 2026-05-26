@@ -36,6 +36,8 @@ class SkillRouteResult:
     rerank_used: bool = False
     rerank_fallback: bool = False
     rerank_reason: str | None = None
+    rerank_skipped_reason: str | None = None
+    no_match_reason: str | None = None
 
     @property
     def reasons(self) -> dict[str, list[str]]:
@@ -44,6 +46,12 @@ class SkillRouteResult:
     @property
     def unselected_reasons(self) -> dict[str, list[str]]:
         return {candidate.name: candidate.reasons for candidate in self.candidates if candidate.name not in self.selected}
+
+    @property
+    def debug_summary(self) -> str:
+        if self.candidates:
+            return f"{len(self.candidates)} candidate(s), selected: {', '.join(self.selected) or '(none)'}"
+        return self.no_match_reason or "No skill metadata matched the task text."
 
 
 @dataclass(frozen=True)
@@ -84,6 +92,7 @@ class SkillRouter:
         rerank_used = False
         rerank_fallback = False
         rerank_reason: str | None = None
+        rerank_skipped_reason: str | None = None
         if self.enable_llm_rerank and self.model_client and candidates:
             decision = self._rerank(task, candidates)
             rerank_used = True
@@ -91,12 +100,18 @@ class SkillRouter:
             rerank_reason = decision.reason
             if decision.selected:
                 selected = decision.selected[: self.top_k]
+        elif self.enable_llm_rerank and candidates:
+            rerank_skipped_reason = "LLM rerank requested but no model client is configured."
+        elif self.enable_llm_rerank:
+            rerank_skipped_reason = "LLM rerank requested but there are no skill candidates to rerank."
         return SkillRouteResult(
             selected=selected,
             candidates=candidates,
             rerank_used=rerank_used,
             rerank_fallback=rerank_fallback,
             rerank_reason=rerank_reason,
+            rerank_skipped_reason=rerank_skipped_reason,
+            no_match_reason=None if candidates else "No skill metadata matched the task text.",
         )
 
     def _rerank(self, task: str, candidates: list[SkillRouteCandidate]) -> SkillRerankDecision:

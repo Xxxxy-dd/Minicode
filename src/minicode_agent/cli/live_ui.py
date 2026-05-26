@@ -12,8 +12,10 @@ from rich.text import Text
 
 from minicode_agent.agent import AgentLoop
 from minicode_agent.config import MiniCodeConfig, normalize_memory_reflection_mode
+from minicode_agent.intent import direct_chat_reply, is_direct_chat_query
 from minicode_agent.models import OpenAICompatibleClient
 from minicode_agent.runtime import RuntimeContext
+from minicode_agent.tools.registry import create_default_registry
 
 
 PALETTE = {
@@ -204,39 +206,9 @@ def run_turn(
     )
 
 
-def is_direct_chat_query(task: str) -> bool:
-    normalized = task.strip().lower()
-    if not normalized:
-        return False
-    direct_patterns = (
-        "你是谁",
-        "你是什么",
-        "你有什么工具",
-        "你能做什么",
-        "你会什么",
-        "你能帮我什么",
-        "你好",
-        "您好",
-        "说中文",
-        "用中文",
-        "你有啥工具",
-        "有什么工具",
-        "tool list",
-        "what tools do you have",
-        "what are your tools",
-        "what can you do",
-        "who are you",
-        "capabilities",
-        "capability",
-    )
-    if any(pattern in normalized for pattern in direct_patterns):
-        return True
-    return False
-
-
 def build_direct_chat_turn(session: ChatSession, task: str) -> ChatTurn:
     prompt = task.strip()
-    summary = direct_chat_reply(prompt)
+    summary = direct_chat_reply(prompt, create_default_registry())
     return ChatTurn(
         prompt=prompt,
         run_id="chat_direct",
@@ -249,19 +221,6 @@ def build_direct_chat_turn(session: ChatSession, task: str) -> ChatTurn:
         trace_path=None,
         memory_mode=session.memory_reflection_mode,
     )
-
-
-def direct_chat_reply(task: str) -> str:
-    normalized = task.strip()
-    lowered = normalized.lower()
-    if any(phrase in normalized for phrase in ("你是谁", "你是什么", "who are you")):
-        return "我是 MiniCode，一个本地编码代理，可以帮你看代码、改代码、跑测试、查问题和整理项目。"
-    if any(phrase in normalized for phrase in ("你有什么工具", "你能做什么", "what can you do", "help")):
-        return "我可以读写文件、搜索代码、运行命令、跑测试、查看 git 状态和差异，也可以按需调用子代理。"
-    if "tool" in lowered or "工具" in normalized:
-        return "我有文件读取、代码搜索、写入编辑、shell 命令、测试运行、git 状态/差异和子代理这些工具。"
-    return "我是 MiniCode，可以帮你处理代码、测试、审查和项目整理。"
-
 
 class ChatRunStream:
     def __init__(self, console: Console) -> None:
@@ -276,7 +235,7 @@ class ChatRunStream:
 def build_approval_callback(console: Console):
     def approve(tool: str, arguments: dict, reason: str) -> bool:
         prompt = "是否批准？[y/N] "
-        answer = console.input(f"[bold #9ad8ff]{prompt}[/bold #9ad8ff]").strip().lower()
+        answer = console.input(Text(prompt, style="bold #9ad8ff")).strip().lower()
         return answer in {"y", "yes"}
 
     return approve
@@ -390,7 +349,7 @@ def render_latest_turn(session: ChatSession, console: Console | None = None) -> 
 
 def render_top_panel(session: ChatSession) -> Panel:
     left = render_left_column(session)
-    right = render_right_column(session)
+    right = render_right_column(session, include_commands=False)
     body = Table.grid(expand=True)
     body.add_column(ratio=2)
     body.add_column(ratio=3)
@@ -404,7 +363,7 @@ def render_left_column(session: ChatSession) -> RenderableType:
     return Group(Align.center(title), Align.center(subtitle), Text(), render_avatar())
 
 
-def render_right_column(session: ChatSession) -> RenderableType:
+def render_right_column(session: ChatSession, include_commands: bool = True) -> RenderableType:
     recent = Text()
     recent.append("Recent Activity\n", style="bold #f5c48c")
     if not session.turns:
@@ -416,6 +375,8 @@ def render_right_column(session: ChatSession) -> RenderableType:
         if len(turn.prompt) > 52:
             recent.append("...", style="#efe8dd")
         recent.append(f"  ({turn.tool_calls} tools)\n", style="#b8aa73")
+    if not include_commands:
+        return recent
     tips = Text()
     tips.append("\nCommands\n", style="bold #f5c48c")
     tips.append("/help    show shortcuts\n", style="#9ad8ff")

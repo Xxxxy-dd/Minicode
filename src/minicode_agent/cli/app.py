@@ -309,9 +309,11 @@ def show_skill(
 def route_skill(
     task: str = typer.Argument(..., help="Task text to route."),
     workspace: Path = typer.Option(Path.cwd(), "--workspace", "-w", help="Workspace directory for local .minicode skills."),
+    llm_rerank: bool = typer.Option(False, "--llm-rerank", help="Use the configured model to rerank candidate skills."),
 ) -> None:
     """Show deterministic skill routing for a task."""
-    result = SkillRouter(default_skill_registry(workspace)).route(task)
+    model_client = build_cli_model_client(workspace) if llm_rerank else None
+    result = SkillRouter(default_skill_registry(workspace), model_client=model_client, enable_llm_rerank=llm_rerank).route(task)
     table = Table(title="MiniCode Skill Route")
     table.add_column("Selected")
     table.add_column("Skill")
@@ -326,11 +328,26 @@ def route_skill(
         )
     if not result.candidates:
         console.print("[dim]No matching skills.[/dim]")
+        console.print(f"[dim]{result.debug_summary}[/dim]")
         return
     console.print(table)
+    console.print(f"[dim]{result.debug_summary}[/dim]")
     if result.rerank_used:
         fallback = " fallback" if result.rerank_fallback else ""
         console.print(f"[dim]rerank{fallback}: {result.rerank_reason or 'completed'}[/dim]")
+    elif result.rerank_skipped_reason:
+        console.print(f"[dim]rerank skipped: {result.rerank_skipped_reason}[/dim]")
+
+
+def build_cli_model_client(workspace: Path):
+    config = MiniCodeConfig.from_env(workspace)
+    if not config.model_name:
+        return None
+    return OpenAICompatibleClient(
+        model=config.model_name,
+        api_key=config.model_api_key,
+        base_url=config.model_base_url,
+    )
 
 
 @memory_app.command("list")

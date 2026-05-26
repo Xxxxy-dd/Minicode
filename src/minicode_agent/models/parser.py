@@ -3,6 +3,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+from minicode_agent.intent import is_tool_intent_text
+
 
 @dataclass(frozen=True)
 class ModelAction:
@@ -142,59 +144,7 @@ def direct_answer_payload(payload: dict[str, Any]) -> bool:
 
 
 def is_tool_intent_action(value: str) -> bool:
-    normalized = value.strip().lower()
-    tool_phrases = (
-        "read file",
-        "read the file",
-        "read readme",
-        "write file",
-        "edit file",
-        "modify file",
-        "update file",
-        "run command",
-        "run shell",
-        "run test",
-        "run tests",
-        "search code",
-        "search file",
-        "search for",
-        "grep for",
-        "find in code",
-        "inspect file",
-        "inspect project",
-        "inspect workspace",
-        "list files",
-        "list project files",
-        "call tool",
-        "use tool",
-        "execute command",
-        "open file",
-        "读取文件",
-        "阅读文件",
-        "读取 readme",
-        "阅读 readme",
-        "写入文件",
-        "编辑文件",
-        "修改文件",
-        "运行命令",
-        "执行命令",
-        "运行测试",
-        "搜索代码",
-        "搜索文件",
-        "搜索项目",
-        "查找代码",
-        "查找文件",
-        "查看文件",
-        "检查项目",
-        "检查工作区",
-        "列出文件",
-        "列出项目文件",
-        "调用工具",
-        "使用工具",
-    )
-    if any(phrase in normalized for phrase in tool_phrases):
-        return True
-    return bool(re.search(r"\b(read|write|edit|modify|update|inspect|open)\s+[\w./\\-]+\.\w+\b", normalized))
+    return is_tool_intent_text(value)
 
 
 def _parse_action(value: Any, stop: bool) -> ModelAction | None:

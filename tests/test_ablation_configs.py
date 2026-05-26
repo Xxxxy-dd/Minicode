@@ -95,6 +95,18 @@ def test_baseline_review_task_falls_back_when_subagents_disabled(tmp_path) -> No
     assert planned[0]["payload"]["tool"] == "read_file"
 
 
+def test_baseline_review_task_uses_common_entry_file_when_subagents_disabled(tmp_path) -> None:
+    (tmp_path / "pyproject.toml").write_text("[project]\nname = 'demo'\n", encoding="utf-8")
+    runtime = RuntimeContext.create(tmp_path, run_id="ablation_review_entry_file_test")
+
+    result = AgentLoop(runtime, "review current diff", **resolve_ablation_config("baseline").agent_kwargs()).run()
+
+    assert result.state.current_phase == AgentPhase.DONE
+    action_results = [event["payload"] for event in result.transcript if event["event"] == "action_result"]
+    assert action_results[0]["tool"] == "read_file"
+    assert "pyproject.toml" in action_results[0]["metadata"].get("path", "")
+
+
 def test_harness_report_includes_feature_flags(tmp_path) -> None:
     (tmp_path / "README.md").write_text("# Demo\n", encoding="utf-8")
     runner = HarnessRunner(tmp_path, config="memory_skill")

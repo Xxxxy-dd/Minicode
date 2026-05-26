@@ -127,6 +127,27 @@ def test_cli_skills_route_shows_scores() -> None:
     assert result.exit_code == 0, result.output
     assert "code-review" in result.output
     assert "*" in result.output
+    assert "candidate" in result.output
+
+
+def test_cli_skills_route_shows_no_match_reason() -> None:
+    result = CliRunner().invoke(app, ["skills", "route", "say hello and wait"])
+
+    assert result.exit_code == 0, result.output
+    assert "No matching skills" in result.output
+    assert "No skill metadata matched" in result.output
+
+
+def test_cli_skills_route_accepts_llm_rerank_without_model(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("MINICODE_MODEL", raising=False)
+    monkeypatch.delenv("OPENAI_MODEL", raising=False)
+
+    result = CliRunner().invoke(app, ["skills", "route", "review this diff", "--workspace", str(tmp_path), "--llm-rerank"])
+
+    assert result.exit_code == 0, result.output
+    assert "code-review" in result.output
+    assert "rerank skipped" in result.output
+    assert "no model client is configured" in result.output
 
 
 def test_cli_skills_list_includes_workspace_skills(tmp_path) -> None:
@@ -187,6 +208,8 @@ def test_skill_router_does_not_force_unrelated_skill() -> None:
 
     assert result.selected == []
     assert result.candidates == []
+    assert result.no_match_reason
+    assert "No skill metadata matched" in result.debug_summary
 
 
 def test_skill_router_does_not_route_plain_readme_read_as_release_polish() -> None:
@@ -239,6 +262,13 @@ def test_skill_router_can_llm_rerank_top_candidates() -> None:
     assert not result.rerank_fallback
     assert result.selected[0] == "code-review"
     assert result.rerank_reason
+
+
+def test_skill_router_explains_skipped_llm_rerank_without_model() -> None:
+    result = SkillRouter(enable_llm_rerank=True).route("review this diff")
+
+    assert not result.rerank_used
+    assert result.rerank_skipped_reason == "LLM rerank requested but no model client is configured."
 
 
 def write_skill(root: Path, name: str, description: str) -> Path:

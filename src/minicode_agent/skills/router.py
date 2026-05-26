@@ -41,6 +41,10 @@ class SkillRouteResult:
     def reasons(self) -> dict[str, list[str]]:
         return {candidate.name: candidate.reasons for candidate in self.candidates if candidate.name in self.selected}
 
+    @property
+    def unselected_reasons(self) -> dict[str, list[str]]:
+        return {candidate.name: candidate.reasons for candidate in self.candidates if candidate.name not in self.selected}
+
 
 @dataclass(frozen=True)
 class SkillRerankDecision:

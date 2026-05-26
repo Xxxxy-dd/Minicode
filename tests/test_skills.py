@@ -2,6 +2,7 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
+from minicode_agent.agent.planner import RuleBasedPlanner
 from minicode_agent.cli.app import app
 from minicode_agent.skills import SkillError, SkillRegistry, SkillRouter
 from minicode_agent.models import ModelResponse
@@ -13,11 +14,14 @@ def test_builtin_skill_registry_loads_expected_skills() -> None:
 
     names = [skill.name for skill in registry.list()]
 
-    assert names == ["code-review", "debugging", "test-writing"]
+    assert {"code-review", "debugging", "refactoring", "release-polish", "repo-onboarding", "security-review", "test-writing"} <= set(names)
     debugging = registry.get("debugging")
     assert debugging.metadata.description.startswith("Diagnose")
     assert "失败" in debugging.metadata.aliases
     assert "Workflow:" in debugging.content
+    refactoring = registry.get("refactoring")
+    assert "refactor" in refactoring.metadata.aliases
+    assert "Workflow:" in refactoring.content
 
 
 def test_skill_registry_reports_unknown_skill() -> None:
@@ -149,6 +153,20 @@ def test_skill_router_selects_code_review_for_diff_review() -> None:
     assert any("review" in reason for reason in result.reasons["code-review"])
 
 
+def test_skill_router_selects_v11_builtin_skills() -> None:
+    router = SkillRouter()
+
+    refactor = router.route("refactor duplicate code without changing behavior")
+    release = router.route("prepare V1.1 release")
+    security = router.route("审查 dangerous command and secret handling")
+    onboarding = router.route("inspect repo and explain project structure")
+
+    assert refactor.selected[0] == "refactoring"
+    assert release.selected[0] == "release-polish"
+    assert security.selected[0] == "security-review"
+    assert onboarding.selected[0] == "repo-onboarding"
+
+
 def test_skill_router_supports_chinese_aliases() -> None:
     debug_result = SkillRouter().route("修复测试失败")
     review_result = SkillRouter().route("审查 diff 风险")
@@ -157,11 +175,48 @@ def test_skill_router_supports_chinese_aliases() -> None:
     assert "code-review" in review_result.selected
 
 
-def test_skill_router_does_not_force_unrelated_skill() -> None:
+def test_skill_router_selects_repo_onboarding_for_project_structure() -> None:
     result = SkillRouter().route("list project files and inspect structure")
+
+    assert result.selected == ["repo-onboarding"]
+    assert result.reasons["repo-onboarding"]
+
+
+def test_skill_router_does_not_force_unrelated_skill() -> None:
+    result = SkillRouter().route("say hello and wait for the user")
 
     assert result.selected == []
     assert result.candidates == []
+
+
+def test_skill_router_does_not_route_plain_readme_read_as_release_polish() -> None:
+    result = SkillRouter().route("read README.md")
+
+    assert "release-polish" not in result.selected
+
+
+def test_skill_route_exposes_unselected_candidate_reasons() -> None:
+    result = SkillRouter().route("review this diff for security risks")
+
+    assert result.selected
+    assert result.unselected_reasons
+    assert all(name not in result.selected for name in result.unselected_reasons)
+
+
+def test_rule_based_planner_delegates_skill_selection_to_router() -> None:
+    planner = RuleBasedPlanner()
+
+    assert planner.select_skill("prepare V1.1 release") == "release-polish"
+    assert planner.select_skill("refactor duplicate code") == "refactoring"
+
+
+def test_rule_based_planner_can_use_injected_skill_router(tmp_path) -> None:
+    write_skill(tmp_path, "local-release", "Local release helper skill.")
+    router = SkillRouter(SkillRegistry(root=tmp_path))
+
+    planner = RuleBasedPlanner(router)
+
+    assert planner.select_skill("use local-release") == "local-release"
 
 
 def test_skill_router_can_llm_rerank_top_candidates() -> None:

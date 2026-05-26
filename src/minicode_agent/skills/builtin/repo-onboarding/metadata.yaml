@@ -1,0 +1,22 @@
+name: repo-onboarding
+description: Quickly map an unfamiliar repository before planning changes.
+tags:
+  - onboarding
+  - repo
+  - architecture
+applies_to:
+  - unfamiliar repositories
+  - project structure discovery
+  - architecture overview
+examples:
+  - inspect this repo and explain the main modules
+  - help me understand the project structure
+aliases:
+  - onboarding
+  - inspect repo
+  - project structure
+  - architecture
+  - understand repo
+  - 熟悉项目
+  - 项目结构
+  - 了解项目

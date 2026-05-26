@@ -1,0 +1,24 @@
+name: security-review
+description: Review paths, commands, secrets, permissions, and dependency risks.
+tags:
+  - security
+  - permissions
+  - safety
+applies_to:
+  - dangerous commands
+  - sensitive paths
+  - secret handling
+  - permission policy
+examples:
+  - review command safety rules
+  - check for secret leaks in trace payloads
+aliases:
+  - security
+  - permission
+  - secret
+  - unsafe command
+  - dangerous command
+  - 安全
+  - 权限
+  - 密钥
+  - 危险命令

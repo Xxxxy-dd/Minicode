@@ -1,0 +1,21 @@
+name: refactoring
+description: Refactor code while preserving behavior and verification evidence.
+tags:
+  - refactor
+  - maintainability
+  - behavior
+applies_to:
+  - behavior preserving refactors
+  - duplicate code cleanup
+  - code organization
+examples:
+  - refactor duplicate code without changing behavior
+  - clean up this module and keep tests passing
+aliases:
+  - refactor
+  - cleanup
+  - duplicate code
+  - maintainability
+  - 重构
+  - 清理
+  - 去重

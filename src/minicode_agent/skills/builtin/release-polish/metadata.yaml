@@ -1,0 +1,23 @@
+name: release-polish
+description: Prepare project docs, demos, checks, and summaries for a release.
+tags:
+  - release
+  - docs
+  - polish
+applies_to:
+  - release checklist
+  - documentation updates
+  - demo commands
+  - smoke tests
+examples:
+  - prepare V1.1 release notes
+  - polish docs and demo before release
+aliases:
+  - release
+  - changelog
+  - release notes
+  - docs polish
+  - demo
+  - 发布
+  - 发版
+  - 发布材料

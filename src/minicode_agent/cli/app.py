@@ -328,6 +328,9 @@ def route_skill(
         console.print("[dim]No matching skills.[/dim]")
         return
     console.print(table)
+    if result.rerank_used:
+        fallback = " fallback" if result.rerank_fallback else ""
+        console.print(f"[dim]rerank{fallback}: {result.rerank_reason or 'completed'}[/dim]")
 
 
 @memory_app.command("list")

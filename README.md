@@ -129,6 +129,8 @@ MiniCode 可以加载内置技能、外部技能和工作区技能。加载顺�
 2. 环境变量 `MINICODE_SKILL_PATHS` 指定的额外目录
 3. 当前工作区的 `.minicode/skills`
 
+当前内置技能包括 `debugging`、`test-writing`、`code-review`、`refactoring`、`release-polish`、`security-review` 和 `repo-onboarding`。
+
 技能目录结构：
 
 ```text
@@ -265,4 +267,3 @@ V1 已经具备完整的本地 Agent Runtime 骨架，适合继续做两类迭�
 
 - 稳定性：继续收敛交互 UI、意图识别、工具选择、异常恢复和测试覆盖
 - 能力增强：扩展文件操作、命令执行策略、技能生态、记忆质量和 benchmark 任务
-

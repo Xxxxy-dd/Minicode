@@ -5,7 +5,7 @@ from typing import Any
 from minicode_agent.memory import MemoryRecord
 from minicode_agent.core.state import TaskState
 from minicode_agent.models import ModelClient, ModelResponse, build_planning_prompt, parse_model_plan
-from minicode_agent.skills import SkillDefinition
+from minicode_agent.skills import SkillDefinition, SkillRouter
 from minicode_agent.trace.store import TraceStore
 from minicode_agent.tools.registry import ToolRegistry
 
@@ -32,15 +32,12 @@ class ModelDecision:
 class RuleBasedPlanner:
     """Small deterministic planner used before model-driven planning exists."""
 
+    def __init__(self, skill_router: SkillRouter | None = None) -> None:
+        self.skill_router = skill_router or SkillRouter()
+
     def select_skill(self, goal: str) -> str | None:
-        normalized = goal.lower()
-        if any(token in normalized for token in ("write test", "add test", "test case", "unit test")):
-            return "test-writing"
-        if any(token in normalized for token in ("review", "audit", "check diff", "code review")):
-            return "code-review"
-        if any(token in normalized for token in ("bug", "fail", "failing", "error", "pytest")):
-            return "debugging"
-        return None
+        result = self.skill_router.route(goal)
+        return result.selected[0] if result.selected else None
 
     def plan_steps(self, goal: str) -> list[str]:
         return [

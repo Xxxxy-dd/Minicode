@@ -106,12 +106,6 @@ class AgentLoop:
             trace_store=runtime.trace_store,
             run_id=runtime.run_id,
         )
-        self.rule_planner = RuleBasedPlanner()
-        self.model_planner = (
-            ModelDrivenPlanner(model_client, registry, trace_store=runtime.trace_store, run_id=runtime.run_id)
-            if model_client
-            else None
-        )
         self.failure_reason: str | None = None
         self.observations: list[dict[str, Any]] = []
         self.successful_action_results: dict[str, dict[str, Any]] = {}
@@ -123,6 +117,12 @@ class AgentLoop:
             self.skill_registry,
             model_client=self.aux_model_client,
             enable_llm_rerank=enable_skill_rerank,
+        )
+        self.rule_planner = RuleBasedPlanner(self.skill_router)
+        self.model_planner = (
+            ModelDrivenPlanner(model_client, registry, trace_store=runtime.trace_store, run_id=runtime.run_id)
+            if model_client
+            else None
         )
         self.active_skills: list[SkillDefinition] = []
         self.reflection_engine = DeterministicReflectionEngine()
@@ -190,6 +190,7 @@ class AgentLoop:
                 "skills": self.state.selected_skills,
                 "candidates": self.state.skill_candidates,
                 "reasons": self.state.skill_route_reasons,
+                "unselected_reasons": route_result.unselected_reasons if self.enable_skills else {},
                 "rerank_used": route_result.rerank_used if self.enable_skills else False,
                 "rerank_fallback": route_result.rerank_fallback if self.enable_skills else False,
                 "rerank_reason": route_result.rerank_reason if self.enable_skills else None,

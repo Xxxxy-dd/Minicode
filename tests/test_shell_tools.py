@@ -96,6 +96,39 @@ def test_run_tests_defaults_to_pytest_after_approval(tmp_path) -> None:
     assert "passed" in observation.output
 
 
+def test_run_formatter_requires_explicit_command_and_approval(tmp_path) -> None:
+    observation = execute("run_formatter", tmp_path, {"argv": python_argv("print('styled')")})
+
+    assert not observation.ok
+    assert observation.metadata["permission"] == PermissionMode.ASK.value
+
+
+def test_run_formatter_executes_after_approval(tmp_path) -> None:
+    observation = execute(
+        "run_formatter",
+        tmp_path,
+        {"argv": python_argv("print('styled')")},
+        approved=True,
+    )
+
+    assert observation.ok
+    assert "styled" in observation.output
+    assert observation.metadata["quality_tool"] == "formatter"
+
+
+def test_run_linter_executes_after_approval(tmp_path) -> None:
+    observation = execute(
+        "run_linter",
+        tmp_path,
+        {"argv": python_argv("print('lint')")},
+        approved=True,
+    )
+
+    assert observation.ok
+    assert "lint" in observation.output
+    assert observation.metadata["quality_tool"] == "linter"
+
+
 def test_cli_run_shell_requires_approval(tmp_path) -> None:
     result = CliRunner().invoke(
         app,

@@ -16,7 +16,17 @@ def test_registry_lists_default_tools() -> None:
     registry = create_default_registry()
     names = {tool.spec.name for tool in registry.list()}
 
-    assert {"list_files", "read_file", "search_code", "git_status", "git_diff"} <= names
+    assert {
+        "list_files",
+        "read_file",
+        "search_code",
+        "git_status",
+        "git_diff",
+        "inspect_repo",
+        "apply_patch",
+        "run_formatter",
+        "run_linter",
+    } <= names
 
 
 def test_list_files_reads_workspace_tree(tmp_path) -> None:
@@ -96,3 +106,35 @@ def test_cli_read_file(tmp_path) -> None:
 
     assert result.exit_code == 0
     assert "# CLI" in result.output
+
+
+def test_inspect_repo_returns_structured_summary(tmp_path) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "tests").mkdir()
+    (tmp_path / ".minicode" / "eval_workspaces").mkdir(parents=True)
+    (tmp_path / ".pytest-tmp-day3").mkdir()
+    (tmp_path / "README.md").write_text("# Demo\n", encoding="utf-8")
+    (tmp_path / "pyproject.toml").write_text("[tool.pytest.ini_options]\n", encoding="utf-8")
+    (tmp_path / "src" / "app.py").write_text("print('hello')\n", encoding="utf-8")
+    (tmp_path / "tests" / "test_app.py").write_text("def test_ok():\n    assert True\n", encoding="utf-8")
+    (tmp_path / ".minicode" / "eval_workspaces" / "README.md").write_text("# Noise\n", encoding="utf-8")
+    (tmp_path / ".pytest-tmp-day3" / "README.md").write_text("# Noise\n", encoding="utf-8")
+
+    observation = run_tool("inspect_repo", tmp_path)
+
+    assert observation.ok
+    assert "Python" in observation.output
+    assert "README.md" in observation.metadata["entry_files"]
+    assert not any(path.startswith(".minicode/") for path in observation.metadata["entry_files"])
+    assert not any(path.startswith(".pytest-tmp") for path in observation.metadata["entry_files"])
+    assert "python -m pytest" in observation.metadata["test_commands"]
+
+
+def test_cli_inspect_repo(tmp_path) -> None:
+    (tmp_path / "README.md").write_text("# CLI\n", encoding="utf-8")
+
+    result = CliRunner().invoke(app, ["tools", "run", "inspect_repo", "--workspace", str(tmp_path)])
+
+    assert result.exit_code == 0, result.output
+    assert "entry_files" in result.output
+    assert "README.md" in result.output

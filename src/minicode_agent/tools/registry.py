@@ -1,5 +1,8 @@
 from minicode_agent.tools.base import BaseTool, ToolError
+from minicode_agent.tools.patch import ApplyPatchTool
+from minicode_agent.tools.quality import RunFormatterTool, RunLinterTool
 from minicode_agent.tools.readonly import GitDiffTool, GitStatusTool, ListFilesTool, ReadFileTool, SearchCodeTool
+from minicode_agent.tools.repo import InspectRepoTool
 from minicode_agent.tools.shell import RunShellTool, RunTestsTool
 from minicode_agent.tools.subagent import SpawnSubagentTool
 from minicode_agent.tools.write import AppendFileTool, CreateFileTool, DeleteFileTool, EditFileTool, WriteFileTool
@@ -39,6 +42,10 @@ def create_default_registry(include_subagents: bool = True) -> ToolRegistry:
     registry.register(RunTestsTool())
     registry.register(GitStatusTool())
     registry.register(GitDiffTool())
+    registry.register(InspectRepoTool())
+    registry.register(ApplyPatchTool())
+    registry.register(RunFormatterTool())
+    registry.register(RunLinterTool())
     if include_subagents:
         registry.register(SpawnSubagentTool())
     return registry

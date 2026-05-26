@@ -202,6 +202,11 @@ minicode tools run delete_file --path old_notes.txt --approved
 minicode tools run edit_file --path notes.txt --old-text "hello" --new-text "hi" --approved
 minicode tools run run_shell --command "python --version" --approved
 minicode tools run run_tests --command "python -m pytest tests" --approved
+minicode tools run inspect_repo --workspace .
+minicode tools run run_formatter --command "python -m black src tests" --approved
+minicode tools run run_linter --command "python -m ruff check src tests" --approved
+minicode tools run apply_patch --patch "<unified diff>" --approved
+minicode tools run apply_patch --patch-file change.diff --approved
 ```
 
 ## 评测

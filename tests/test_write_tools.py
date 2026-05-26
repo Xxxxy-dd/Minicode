@@ -405,6 +405,66 @@ def test_cli_append_file(tmp_path) -> None:
     assert (tmp_path / "notes.txt").read_text(encoding="utf-8") == "first\n\nsecond\n"
 
 
+def test_apply_patch_requires_approval(tmp_path) -> None:
+    path = tmp_path / "notes.txt"
+    path.write_text("old\n", encoding="utf-8")
+    patch = "--- a/notes.txt\n+++ b/notes.txt\n@@ -1 +1 @@\n-old\n+new\n"
+
+    observation = execute("apply_patch", tmp_path, {"patch": patch})
+
+    assert not observation.ok
+    assert observation.metadata["permission"] == PermissionMode.ASK.value
+    assert path.read_text(encoding="utf-8") == "old\n"
+
+
+def test_apply_patch_updates_file_after_approval(tmp_path) -> None:
+    path = tmp_path / "notes.txt"
+    path.write_text("old\n", encoding="utf-8")
+    patch = "--- a/notes.txt\n+++ b/notes.txt\n@@ -1 +1 @@\n-old\n+new\n"
+
+    observation = execute("apply_patch", tmp_path, {"patch": patch}, approved=True)
+
+    assert observation.ok, observation.error
+    assert path.read_text(encoding="utf-8") == "new\n"
+    assert observation.metadata["paths"] == ["notes.txt"]
+    assert observation.metadata["check_exit_code"] == 0
+    assert observation.metadata["check_command"] == "git apply --check --whitespace=nowarn -"
+    assert observation.metadata["apply_command"] == "git apply --whitespace=nowarn -"
+
+
+def test_apply_patch_blocks_workspace_escape_even_when_approved(tmp_path) -> None:
+    patch = "--- a/../outside.txt\n+++ b/../outside.txt\n@@ -1 +1 @@\n-old\n+new\n"
+
+    observation = execute("apply_patch", tmp_path, {"patch": patch}, approved=True)
+
+    assert not observation.ok
+    assert "escapes workspace" in observation.error
+
+
+def test_cli_apply_patch_from_patch_file(tmp_path) -> None:
+    path = tmp_path / "notes.txt"
+    patch_file = tmp_path / "change.diff"
+    path.write_text("old\n", encoding="utf-8")
+    patch_file.write_text("\ufeff--- a/notes.txt\n+++ b/notes.txt\n@@ -1 +1 @@\n-old\n+new\n", encoding="utf-8")
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "tools",
+            "run",
+            "apply_patch",
+            "--workspace",
+            str(tmp_path),
+            "--patch-file",
+            str(patch_file),
+            "--approved",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert path.read_text(encoding="utf-8") == "new\n"
+
+
 def test_cli_delete_file_missing_ok(tmp_path) -> None:
     result = CliRunner().invoke(
         app,

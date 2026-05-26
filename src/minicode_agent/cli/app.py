@@ -457,6 +457,8 @@ def run_tool(
     task: str | None = typer.Option(None, "--task", help="Task for spawn_subagent."),
     subagent_max_steps: int | None = typer.Option(None, "--subagent-max-steps", help="Max steps for spawn_subagent."),
     content: str | None = typer.Option(None, "--content", help="Content for write_file."),
+    patch: str | None = typer.Option(None, "--patch", help="Unified diff content for apply_patch."),
+    patch_file: Path | None = typer.Option(None, "--patch-file", help="Read unified diff content for apply_patch from a file."),
     old_text: str | None = typer.Option(None, "--old-text", help="Exact text to replace for edit_file."),
     new_text: str | None = typer.Option(None, "--new-text", help="Replacement text for edit_file."),
     append_format: str | None = typer.Option(None, "--append-format", help="Append format: auto, raw, text, markdown, code, json, csv, toml, or yaml."),
@@ -476,6 +478,7 @@ def run_tool(
     registry = create_default_registry()
     runtime = RuntimeContext.create(workspace)
     executor = ToolExecutor(registry, trace_store=runtime.trace_store, run_id=runtime.run_id)
+    patch_content = read_patch_file(patch_file) if patch_file else patch
     arguments = compact_arguments({
         "path": path,
         "pattern": pattern,
@@ -485,6 +488,7 @@ def run_tool(
         "task": task,
         "max_steps": subagent_max_steps,
         "content": content,
+        "patch": patch_content,
         "old_text": old_text,
         "new_text": new_text,
         "append_format": append_format,
@@ -518,6 +522,13 @@ def main() -> None:
 
 def safe_console_text(text: str) -> str:
     return text.lstrip("\ufeff")
+
+
+def read_patch_file(path: Path) -> str:
+    try:
+        return path.expanduser().read_text(encoding="utf-8-sig")
+    except OSError as exc:
+        raise typer.BadParameter(f"Could not read patch file: {exc}") from exc
 
 
 def compact_arguments(arguments: dict) -> dict:

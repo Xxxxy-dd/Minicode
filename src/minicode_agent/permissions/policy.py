@@ -17,8 +17,9 @@ class PathSandbox:
 
     path_argument_names = ("path", "target_path", "file_path")
 
-    def __init__(self, workspace: Path) -> None:
+    def __init__(self, workspace: Path, path_argument_names: tuple[str, ...] | None = None) -> None:
         self.workspace = workspace.expanduser().resolve()
+        self.path_argument_names = path_argument_names or self.path_argument_names
 
     def validate_arguments(self, arguments: dict[str, Any]) -> PermissionDecision | None:
         for key in self.path_argument_names:
@@ -74,10 +75,11 @@ class PermissionPolicy:
     def decide(self, tool: ToolSpec, arguments: dict[str, Any] | None = None, workspace: Path | None = None) -> PermissionDecision:
         arguments = arguments or {}
         if workspace is not None:
-            sandbox_decision = PathSandbox(workspace).validate_arguments(arguments)
+            path_arg_names = tool.path_arg_names or PathSandbox.path_argument_names
+            sandbox_decision = PathSandbox(workspace, path_arg_names).validate_arguments(arguments)
             if sandbox_decision is not None:
                 return sandbox_decision
-        command_text = command_text_from_arguments(arguments)
+        command_text = command_text_from_arguments(arguments, tool.command_arg_names)
         if command_text is not None:
             command_decision = CommandSafetyClassifier().classify(command_text)
             if command_decision.mode == PermissionMode.DENY:
@@ -93,11 +95,12 @@ class PermissionPolicy:
         return PermissionDecision(mode=PermissionMode.ALLOW, reason="Tool is allowed by default.")
 
 
-def command_text_from_arguments(arguments: dict[str, Any]) -> str | None:
-    command = arguments.get("command")
-    if command is not None:
-        return str(command)
-    argv = arguments.get("argv")
+def command_text_from_arguments(arguments: dict[str, Any], command_arg_names: tuple[str, ...] = ()) -> str | None:
+    command_names = command_arg_names or ("command",)
+    argv = arguments.get("argv") if "argv" in command_names else None
     if isinstance(argv, list):
         return " ".join(str(part) for part in argv)
+    command = next((arguments.get(name) for name in command_names if name != "argv" and arguments.get(name) is not None), None)
+    if command is not None:
+        return str(command)
     return None

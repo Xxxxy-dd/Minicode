@@ -93,11 +93,13 @@ def test_default_tool_duplicate_policies_are_declared() -> None:
     registry = create_default_registry()
     block_identical = {
         "append_file",
+        "apply_patch",
         "create_file",
         "delete_file",
         "edit_file",
         "git_diff",
         "git_status",
+        "inspect_repo",
         "list_files",
         "read_file",
         "search_code",
@@ -119,10 +121,22 @@ def test_default_tool_cross_cutting_policies_are_declared() -> None:
     assert ToolStateEffect.MARKS_MODIFIED_FILE in registry.get("edit_file").spec.state_effects
     assert ToolStateEffect.RECORDS_PATH_FACT in registry.get("read_file").spec.state_effects
     assert ToolIntent.FILE_OVERWRITE in registry.get("write_file").spec.intents
+    assert ToolIntent.FILE_READ in registry.get("read_file").spec.intents
+    assert ToolIntent.FILE_SEARCH in registry.get("search_code").spec.intents
     assert ToolIntent.FILE_APPEND in registry.get("append_file").spec.intents
     assert ToolIntent.FILE_CREATE in registry.get("create_file").spec.intents
     assert ToolIntent.FILE_DELETE in registry.get("delete_file").spec.intents
     assert ToolIntent.FILE_EDIT in registry.get("edit_file").spec.intents
+    assert ToolIntent.FILE_EDIT in registry.get("apply_patch").spec.intents
+    assert ToolIntent.REPO_INSPECT in registry.get("inspect_repo").spec.intents
+    assert ToolIntent.COMMAND_RUN in registry.get("run_formatter").spec.intents
+    assert ToolIntent.COMMAND_RUN in registry.get("run_linter").spec.intents
+    assert registry.get("read_file").spec.path_arg_names == ("path",)
+    assert registry.get("run_formatter").spec.command_arg_names == ("command", "argv")
+    assert registry.get("inspect_repo").spec.input_schema["properties"]["max_files"]["default"] == 200
+    assert registry.get("apply_patch").spec.input_schema["anyOf"]
+    assert registry.get("run_formatter").spec.input_schema["anyOf"]
+    assert registry.get("run_linter").spec.input_schema["anyOf"]
     assert registry.get("read_file").spec.capture_full_output is True
     assert registry.get("spawn_subagent").spec.counts_as_subagent_call is True
     assert registry.get("read_file").spec.subagent_roles == ("explorer", "reviewer")

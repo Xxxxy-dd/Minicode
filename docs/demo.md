@@ -26,6 +26,15 @@ E:\conda\envs\minicode\Scripts\minicode.exe skills list
 
 This shows explainable skill routing with Chinese and English aliases.
 
+## Inspect Tools
+
+```powershell
+E:\conda\envs\minicode\Scripts\minicode.exe tools list
+E:\conda\envs\minicode\Scripts\minicode.exe tools run inspect_repo --workspace .
+```
+
+This shows the declared tool runtime and the structured repository summary used by planner/debug flows.
+
 ## Memory
 
 ```powershell

@@ -4,7 +4,7 @@ import sys
 from typing import Any
 
 from minicode_agent.tools.base import BaseTool, ToolError
-from minicode_agent.tools.types import PermissionMode, RiskLevel, ToolContext, ToolSpec
+from minicode_agent.tools.types import PermissionMode, RiskLevel, ToolContext, ToolIntent, ToolSpec
 
 DEFAULT_TIMEOUT_SECONDS = 30
 DEFAULT_MAX_OUTPUT_CHARS = 20000
@@ -16,6 +16,9 @@ class RunShellTool(BaseTool):
         description="Run an approved command in the workspace without shell expansion.",
         risk_level=RiskLevel.HIGH,
         permission=PermissionMode.ASK,
+        intents=(ToolIntent.COMMAND_RUN,),
+        command_arg_names=("command", "argv"),
+        capability="shell_command",
         timeout_seconds=DEFAULT_TIMEOUT_SECONDS,
     )
 
@@ -34,6 +37,9 @@ class RunTestsTool(BaseTool):
         description="Run an approved test command in the workspace.",
         risk_level=RiskLevel.MEDIUM,
         permission=PermissionMode.ASK,
+        intents=(ToolIntent.TEST_RUN, ToolIntent.COMMAND_RUN),
+        command_arg_names=("command", "argv"),
+        capability="test_command",
         timeout_seconds=60,
     )
 

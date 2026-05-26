@@ -33,11 +33,16 @@ class ToolStateEffect(StrEnum):
 
 
 class ToolIntent(StrEnum):
+    FILE_READ = "file_read"
+    FILE_SEARCH = "file_search"
     FILE_OVERWRITE = "file_overwrite"
     FILE_APPEND = "file_append"
     FILE_CREATE = "file_create"
     FILE_DELETE = "file_delete"
     FILE_EDIT = "file_edit"
+    COMMAND_RUN = "command_run"
+    TEST_RUN = "test_run"
+    REPO_INSPECT = "repo_inspect"
 
 
 class ToolSpec(BaseModel):
@@ -52,6 +57,9 @@ class ToolSpec(BaseModel):
     capture_full_output: bool = False
     counts_as_subagent_call: bool = False
     subagent_roles: tuple[str, ...] = ()
+    path_arg_names: tuple[str, ...] = ()
+    command_arg_names: tuple[str, ...] = ()
+    capability: str | None = None
     timeout_seconds: int = 30
 
 

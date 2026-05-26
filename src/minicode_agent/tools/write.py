@@ -21,6 +21,8 @@ class WriteFileTool(BaseTool):
         duplicate_policy=DuplicatePolicy.BLOCK_IDENTICAL_SUCCESS,
         state_effects=(ToolStateEffect.MARKS_MODIFIED_FILE,),
         intents=(ToolIntent.FILE_OVERWRITE, ToolIntent.FILE_CREATE),
+        path_arg_names=("path",),
+        capability="file_write",
     )
 
     def _run(self, context: ToolContext, arguments: dict[str, Any]) -> tuple[str, dict[str, Any]]:
@@ -68,6 +70,8 @@ class AppendFileTool(BaseTool):
         duplicate_policy=DuplicatePolicy.BLOCK_IDENTICAL_SUCCESS,
         state_effects=(ToolStateEffect.MARKS_MODIFIED_FILE,),
         intents=(ToolIntent.FILE_APPEND, ToolIntent.FILE_CREATE),
+        path_arg_names=("path",),
+        capability="file_append",
     )
 
     def _run(self, context: ToolContext, arguments: dict[str, Any]) -> tuple[str, dict[str, Any]]:
@@ -122,6 +126,8 @@ class CreateFileTool(BaseTool):
         duplicate_policy=DuplicatePolicy.BLOCK_IDENTICAL_SUCCESS,
         state_effects=(ToolStateEffect.MARKS_MODIFIED_FILE,),
         intents=(ToolIntent.FILE_CREATE,),
+        path_arg_names=("path",),
+        capability="file_create",
     )
 
     def _run(self, context: ToolContext, arguments: dict[str, Any]) -> tuple[str, dict[str, Any]]:
@@ -159,6 +165,8 @@ class DeleteFileTool(BaseTool):
         duplicate_policy=DuplicatePolicy.BLOCK_IDENTICAL_SUCCESS,
         state_effects=(ToolStateEffect.MARKS_MODIFIED_FILE,),
         intents=(ToolIntent.FILE_DELETE,),
+        path_arg_names=("path",),
+        capability="file_delete",
     )
 
     def _run(self, context: ToolContext, arguments: dict[str, Any]) -> tuple[str, dict[str, Any]]:
@@ -199,6 +207,8 @@ class EditFileTool(BaseTool):
         duplicate_policy=DuplicatePolicy.BLOCK_IDENTICAL_SUCCESS,
         state_effects=(ToolStateEffect.MARKS_MODIFIED_FILE,),
         intents=(ToolIntent.FILE_EDIT,),
+        path_arg_names=("path",),
+        capability="file_edit",
     )
 
     def _run(self, context: ToolContext, arguments: dict[str, Any]) -> tuple[str, dict[str, Any]]:

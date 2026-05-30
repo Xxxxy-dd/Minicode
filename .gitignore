@@ -18,3 +18,4 @@ build/
 .minicode/eval_workspaces/
 .minicode/memory/
 .minicode/memory.db
+.minicode/tmp/

@@ -11,6 +11,7 @@ from rich.table import Table
 from rich.text import Text
 
 from minicode_agent.agent import AgentLoop
+from minicode_agent.cli.preview_renderer import render_preview_text
 from minicode_agent.config import MiniCodeConfig, normalize_memory_reflection_mode
 from minicode_agent.intent import direct_chat_reply, is_direct_chat_query
 from minicode_agent.models import OpenAICompatibleClient
@@ -186,7 +187,7 @@ def run_turn(
             enable_skill_rerank=session.llm_rerank,
             memory_reflection_mode=session.memory_reflection_mode,
             event_callback=None,
-            approval_callback=build_approval_callback(console) if session.interactive_approval else None,
+            approval_callback=build_approval_callback(console, status) if session.interactive_approval else None,
         ).run()
     if input_panel_height:
         clear_previous_terminal_lines(console, input_panel_height)
@@ -232,13 +233,29 @@ class ChatRunStream:
             self.console.print(line)
 
 
-def build_approval_callback(console: Console):
-    def approve(tool: str, arguments: dict, reason: str) -> bool:
-        prompt = "是否批准？[y/N] "
-        answer = console.input(Text(prompt, style="bold #9ad8ff")).strip().lower()
-        return answer in {"y", "yes"}
+def build_approval_callback(console: Console, status=None):
+    def approve(tool: str, arguments: dict, reason: str, preview: dict | None = None) -> bool:
+        pause_status(status)
+        try:
+            if preview:
+                console.print(Text(render_preview_text(preview, heading=f"Pending write: {tool}"), style="#cfc7b9"))
+            prompt = "是否批准？[y/N] "
+            answer = console.input(Text(prompt, style="bold #9ad8ff")).strip().lower()
+            return answer in {"y", "yes"}
+        finally:
+            resume_status(status)
 
     return approve
+
+
+def pause_status(status) -> None:
+    if status is not None and hasattr(status, "stop"):
+        status.stop()
+
+
+def resume_status(status) -> None:
+    if status is not None and hasattr(status, "start"):
+        status.start()
 
 
 def format_stream_event(event_type: str, payload: dict) -> Text | None:

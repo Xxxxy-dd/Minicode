@@ -26,7 +26,7 @@ class AgentRunResult:
     transcript: list[dict[str, Any]]
 
 
-ApprovalCallback = Callable[[str, dict[str, Any], str], bool]
+ApprovalCallback = Callable[..., bool]
 
 
 class AgentLoop:
@@ -100,7 +100,9 @@ class AgentLoop:
             LLMReflectionEngine(self.aux_model_client, self.reflection_engine) if self.aux_model_client else None
         )
         self.active_memories: list[MemoryRecord] = []
-        self.compressor = TaskStateCompressor()
+        self.compressor = TaskStateCompressor(
+            tool_effects={tool.spec.name: set(tool.spec.state_effects) for tool in registry.list()}
+        )
 
     def run(self) -> AgentRunResult:
         self.runtime.trace_store.append(
@@ -117,7 +119,29 @@ class AgentLoop:
 
         self._phase(AgentPhase.LOAD_CONTEXT, "Load workspace rules and trace context.")
         known_files = self._load_context()
-        self.active_memories = self.runtime.memory_store.search(self.state.user_goal) if self.enable_memory else []
+        recalled_memories = self.runtime.memory_store.recall(self.state.user_goal) if self.enable_memory else []
+        self.active_memories = [item["record"] for item in recalled_memories]
+        if self.enable_memory:
+            self._observe(
+                "memory_recalled",
+                {
+                    "query": self.state.user_goal,
+                    "count": len(recalled_memories),
+                    "records": [
+                        {
+                            "id": item["record"].id,
+                            "kind": item["record"].kind.value,
+                            "confidence": item["record"].confidence,
+                            "score": item["score"],
+                            "reason": item["reason"],
+                            "source_run_id": item["record"].source_run_id,
+                            "status": item["record"].status.value,
+                            "evidence_refs": memory_evidence_refs(item["record"]),
+                        }
+                        for item in recalled_memories
+                    ],
+                },
+            )
         self._observe(
             "context_loaded",
             {
@@ -433,10 +457,19 @@ class AgentLoop:
             if record is None:
                 skipped += 1
                 rejected_reasons[admission_reason] = rejected_reasons.get(admission_reason, 0) + 1
-                self._observe("memory_rejected", {"kind": candidate.kind.value, "reason": admission_reason})
+                self._observe(
+                    "memory_rejected",
+                    {
+                        "kind": candidate.kind.value,
+                        "reason": admission_reason,
+                        "candidate_reason": candidate.reason,
+                        "source_run_id": candidate.source_run_id,
+                        "evidence_refs": [{"type": "run", "id": candidate.source_run_id}],
+                    },
+                )
                 continue
             try:
-                _, inserted = self.runtime.memory_store.add(
+                stored_record, inserted = self.runtime.memory_store.add(
                     record.kind,
                     record.content,
                     confidence=record.confidence,
@@ -444,11 +477,21 @@ class AgentLoop:
                     tags=record.tags,
                     reason=record.reason,
                     metadata=record.metadata,
+                    admission_reason=admission_reason,
                 )
             except ValueError as exc:
                 skipped += 1
                 rejected_reasons[str(exc)] = rejected_reasons.get(str(exc), 0) + 1
-                self._observe("memory_rejected", {"kind": record.kind.value, "reason": str(exc)})
+                self._observe(
+                    "memory_rejected",
+                    {
+                        "kind": record.kind.value,
+                        "reason": str(exc),
+                        "candidate_reason": record.reason,
+                        "source_run_id": record.source_run_id,
+                        "evidence_refs": memory_evidence_refs(record),
+                    },
+                )
                 continue
             if inserted:
                 written += 1
@@ -456,15 +499,32 @@ class AgentLoop:
                     self.runtime.run_id,
                     "memory_written",
                     {
-                        "kind": record.kind.value,
-                        "confidence": record.confidence,
-                        "reason": record.reason,
-                        "tags": record.tags,
+                        "id": stored_record.id,
+                        "kind": stored_record.kind.value,
+                        "confidence": stored_record.confidence,
+                        "reason": stored_record.reason,
+                        "admission_reason": stored_record.admission_reason,
+                        "tags": stored_record.tags,
+                        "source_run_id": stored_record.source_run_id,
+                        "status": stored_record.status.value,
+                        "metadata": stored_record.metadata,
+                        "evidence_refs": memory_evidence_refs(stored_record),
                     },
                 )
             else:
                 duplicates += 1
                 skipped += 1
+                self._observe(
+                    "memory_rejected",
+                    {
+                        "id": stored_record.id,
+                        "kind": stored_record.kind.value,
+                        "reason": "duplicate memory",
+                        "candidate_reason": record.reason,
+                        "source_run_id": record.source_run_id,
+                        "evidence_refs": memory_evidence_refs(stored_record),
+                    },
+                )
         self.state.metrics.memory_llm_filtered += reflection.filtered_count
         if reflection.summary:
             self.state.task_state.history_summary = reflection.summary
@@ -594,6 +654,7 @@ class AgentLoop:
                 "compressed_observations": result.compressed_observations,
                 "compressed_observation_ids": result.compressed_observation_ids,
                 "compressed_turns": result.compressed_turns,
+                "evidence_refs": result.evidence_refs,
                 "task_state": result.task_state.model_dump(),
             },
         )
@@ -655,25 +716,11 @@ class AgentLoop:
             raise RuntimeError(self.failure_reason)
         self.steps += 1
         context = ToolContext(workspace=self.runtime.workspace)
-        approved = self._request_tool_approval(name, arguments, context)
-        observation = self.executor.execute(name, context, arguments, approved=approved)
+        observation = self.executor.execute(name, context, arguments, approval_callback=self.approval_callback)
         self.state.metrics.tool_calls += 1
         if not observation.ok and observation.metadata.get("permission") == "deny":
             self.state.metrics.permission_blocks += 1
         return observation
-
-    def _request_tool_approval(self, name: str, arguments: dict[str, Any], context: ToolContext) -> bool:
-        if self.approval_callback is None:
-            return False
-        tool = self.executor.registry.get(name)
-        decision = self.executor.policy.decide(
-            tool.spec,
-            arguments=arguments,
-            workspace=context.resolved_workspace,
-        )
-        if decision.mode.value != "ask":
-            return False
-        return self.approval_callback(name, arguments, decision.reason)
 
     def _tool_intent_mismatch_reason(self, goal: str, tool_name: str) -> str | None:
         tool_intents = set(self.executor.registry.get(tool_name).spec.intents)
@@ -728,3 +775,16 @@ def observation_body(observation: dict[str, Any]) -> str:
 
 def action_identity(tool: str, arguments: dict[str, Any]) -> str:
     return json.dumps({"tool": tool, "arguments": arguments}, ensure_ascii=False, sort_keys=True, default=str)
+
+
+def memory_evidence_refs(record: MemoryRecord) -> list[dict[str, Any]]:
+    refs: list[dict[str, Any]] = []
+    if record.source_run_id:
+        refs.append({"type": "run", "id": record.source_run_id})
+    path = record.metadata.get("path") if isinstance(record.metadata, dict) else None
+    if path:
+        refs.append({"type": "file", "path": path})
+    rule = record.metadata.get("rule") if isinstance(record.metadata, dict) else None
+    if rule:
+        refs.append({"type": "rule", "id": rule})
+    return refs

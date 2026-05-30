@@ -66,6 +66,25 @@ def test_tool_executor_redacts_secret_patterns(tmp_path) -> None:
     assert event.payload["arguments"]["command"] == "echo api_key=[redacted]"
 
 
+def test_trace_store_redacts_payloads_from_all_callers(tmp_path) -> None:
+    store = TraceStore(tmp_path / "trace.db")
+
+    store.append(
+        "run_1",
+        "custom_event",
+        {
+            "prompt": "Authorization: Bearer abc123",
+            "metadata": {"token": "ghp_abcdefghijklmnopqrstuvwxyz"},
+            "diff": "+OPENAI_API_KEY=sk-abcdefghijklmnopqrstuvwxyz\n",
+        },
+    )
+
+    event = store.list_events("run_1")[0]
+    assert event.payload["prompt"] == "Authorization: Bearer [redacted]"
+    assert event.payload["metadata"]["token"] == "[redacted]"
+    assert "sk-abcdefghijklmnopqrstuvwxyz" not in event.payload["diff"]
+
+
 def test_runtime_context_creates_trace_store(tmp_path) -> None:
     runtime = RuntimeContext.create(tmp_path, run_id="tool_test")
 

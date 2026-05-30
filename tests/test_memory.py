@@ -2,7 +2,14 @@ from typer.testing import CliRunner
 
 from minicode_agent.agent import AgentLoop
 from minicode_agent.cli.app import app
-from minicode_agent.memory import DeterministicReflectionEngine, LLMReflectionEngine, MemoryKind, MemoryStore, parse_llm_memory_candidates
+from minicode_agent.memory import (
+    DeterministicReflectionEngine,
+    LLMReflectionEngine,
+    MemoryKind,
+    MemoryStatus,
+    MemoryStore,
+    parse_llm_memory_candidates,
+)
 from minicode_agent.memory.reflection import MemoryCandidate
 from minicode_agent.models import build_planning_prompt
 from minicode_agent.models import ModelResponse
@@ -29,6 +36,8 @@ def test_memory_store_adds_and_lists_records(tmp_path) -> None:
     assert records[0].content == "Use python -m pytest tests for this project."
     assert records[0].tags == ["tests"]
     assert records[0].reason == "manual project fact"
+    assert records[0].status == MemoryStatus.ACTIVE
+    assert records[0].admission_reason == "accepted"
 
 
 def test_memory_store_detects_duplicates(tmp_path) -> None:
@@ -54,6 +63,22 @@ def test_memory_store_rejects_secret_content(tmp_path) -> None:
         raise AssertionError("secret memory should be rejected")
 
 
+def test_memory_store_rejects_secret_reason_and_tags(tmp_path) -> None:
+    store = MemoryStore(tmp_path / "memory.db")
+
+    for kwargs, field in (
+        ({"reason": "token=abc123 should not be saved"}, "reason"),
+        ({"tags": ["api_key=abc123"]}, "tag"),
+    ):
+        try:
+            store.add(MemoryKind.USER, "Answer in Chinese.", **kwargs)
+        except ValueError as exc:
+            assert "secret" in str(exc)
+            assert field in str(exc)
+        else:
+            raise AssertionError("secret memory metadata should be rejected")
+
+
 def test_memory_search_returns_relevant_records(tmp_path) -> None:
     store = MemoryStore(tmp_path / "memory.db")
     store.add(MemoryKind.PROJECT, "Use pytest for validation.", confidence=0.5, tags=["tests"])
@@ -63,6 +88,30 @@ def test_memory_search_returns_relevant_records(tmp_path) -> None:
     records = store.search("please run tests")
 
     assert [record.kind for record in records] == [MemoryKind.PROCEDURE, MemoryKind.PROJECT]
+
+
+def test_memory_recall_includes_reason_score_and_skips_stale(tmp_path) -> None:
+    store = MemoryStore(tmp_path / "memory.db")
+    stale, _ = store.add(MemoryKind.PROJECT, "Use pytest for validation.", confidence=0.9, tags=["tests"])
+    active, _ = store.add(MemoryKind.PROCEDURE, "Run pytest before finishing.", confidence=0.8, tags=["tests"])
+    assert store.mark_status(stale.id, MemoryStatus.STALE, reason="outdated command")
+
+    recalled = store.recall("pytest")
+
+    assert [item["record"].id for item in recalled] == [active.id]
+    assert recalled[0]["score"] > 0
+    assert "matched query terms" in recalled[0]["reason"]
+
+
+def test_memory_store_marks_possible_conflicts(tmp_path) -> None:
+    store = MemoryStore(tmp_path / "memory.db")
+    store.add(MemoryKind.PROCEDURE, "Use pytest before finishing.", confidence=0.8)
+
+    record, inserted = store.add(MemoryKind.PROCEDURE, "Do not use pytest before finishing.", confidence=0.8)
+
+    assert inserted
+    assert record.status == MemoryStatus.CONFLICT
+    assert record.metadata["conflict_notes"]
 
 
 def test_memory_store_deletes_records(tmp_path) -> None:
@@ -87,6 +136,22 @@ def test_memory_store_jsonl_fallback(tmp_path, monkeypatch) -> None:
     assert inserted
     assert store.list()[0].id == record.id
     assert store.delete(record.id)
+
+
+def test_memory_store_jsonl_fallback_marks_stale(tmp_path, monkeypatch) -> None:
+    def fail_init(self) -> None:
+        raise ImportError("sqlite unavailable")
+
+    monkeypatch.setattr(MemoryStore, "_init_db", fail_init)
+    store = MemoryStore(tmp_path / "memory.db")
+    record, inserted = store.add(MemoryKind.PROJECT, "Use pytest for validation.", tags=["tests"])
+
+    assert inserted
+    assert store.mark_status(record.id, MemoryStatus.STALE, reason="jsonl stale test")
+    stale = store.list(status=MemoryStatus.STALE)[0]
+    assert stale.id == record.id
+    assert stale.status == MemoryStatus.STALE
+    assert stale.metadata["status_reason"] == "jsonl stale test"
 
 
 def test_build_planning_prompt_includes_relevant_memory(tmp_path) -> None:
@@ -149,7 +214,26 @@ def test_cli_memory_add_and_list(tmp_path) -> None:
     assert "added" in add_result.output
     assert list_result.exit_code == 0, list_result.output
     assert "user_memory" in list_result.output
+    assert "active" in list_result.output
+    assert "manual memory add" in list_result.output
     assert "Answer in Chinese." in list_result.output
+
+
+def test_cli_memory_list_filters_status_and_tag(tmp_path) -> None:
+    runner = CliRunner()
+    add_result = runner.invoke(
+        app,
+        ["memory", "add", "Run pytest.", "--workspace", str(tmp_path), "--tag", "tests"],
+    )
+    memory_id = next(line.split(": ", 1)[1] for line in add_result.output.splitlines() if line.startswith("id: "))
+    stale_result = runner.invoke(app, ["memory", "stale", memory_id, "--workspace", str(tmp_path), "--reason", "superseded"])
+    list_active = runner.invoke(app, ["memory", "list", "--workspace", str(tmp_path), "--tag", "tests"])
+    list_stale = runner.invoke(app, ["memory", "list", "--workspace", str(tmp_path), "--status", "stale", "--tag", "tests"])
+
+    assert stale_result.exit_code == 0, stale_result.output
+    assert "Run pytest." not in list_active.output
+    assert "Run pytest." in list_stale.output
+    assert "status_reason=superseded" in list_stale.output
 
 
 def test_cli_memory_delete(tmp_path) -> None:
@@ -195,6 +279,30 @@ def test_agent_loop_writes_reflection_memory(tmp_path) -> None:
     assert any(record.source_run_id == "agent_memory_test" for record in records)
     events = runtime.trace_store.list_events("agent_memory_test")
     assert "memory_written" in [event.event_type for event in events]
+    written = next(event for event in events if event.event_type == "memory_written")
+    assert written.payload["id"]
+    assert written.payload["admission_reason"] == "accepted"
+    assert written.payload["evidence_refs"]
+    assert runtime.memory_store.get(written.payload["id"]) is not None
+
+
+def test_agent_loop_traces_memory_recall_reason(tmp_path) -> None:
+    runtime = RuntimeContext.create(tmp_path, run_id="agent_memory_recall_test")
+    memory, _ = runtime.memory_store.add(
+        MemoryKind.PROJECT,
+        "Use pytest for validation.",
+        confidence=0.9,
+        source_run_id="seed_run",
+        tags=["tests"],
+    )
+
+    AgentLoop(runtime, "run pytest", enable_skills=False, enable_memory=True).run()
+
+    events = runtime.trace_store.list_events("agent_memory_recall_test")
+    recall = next(event for event in events if event.event_type == "memory_recalled")
+    assert recall.payload["records"][0]["id"] == memory.id
+    assert recall.payload["records"][0]["source_run_id"] == "seed_run"
+    assert "matched query terms" in recall.payload["records"][0]["reason"]
 
 
 def test_parse_llm_memory_candidates_accepts_structured_json() -> None:

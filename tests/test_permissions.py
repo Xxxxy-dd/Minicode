@@ -3,7 +3,7 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from minicode_agent.cli.app import app
-from minicode_agent.permissions.policy import PathSandbox, PermissionPolicy
+from minicode_agent.permissions.policy import CommandSafetyClassifier, PathSandbox, PermissionPolicy, SensitivePathPolicy
 from minicode_agent.tools.base import BaseTool
 from minicode_agent.tools.executor import ToolExecutor
 from minicode_agent.tools.registry import ToolRegistry, create_default_registry
@@ -61,6 +61,36 @@ def test_permission_policy_checks_path_arguments(tmp_path) -> None:
     decision = PermissionPolicy().decide(tool.spec, arguments={"path": "../outside.txt"}, workspace=tmp_path)
 
     assert decision.mode == PermissionMode.DENY
+
+
+def test_sensitive_path_policy_blocks_env_and_ssh_paths() -> None:
+    policy = SensitivePathPolicy()
+
+    assert policy.validate_path(".env").mode == PermissionMode.DENY
+    assert policy.validate_path(".ssh/id_ed25519").mode == PermissionMode.DENY
+    assert policy.validate_path("config.pem").mode == PermissionMode.DENY
+    assert policy.validate_path(".env.example").mode == PermissionMode.ALLOW
+
+
+def test_permission_policy_sensitive_path_read_write_matrix(tmp_path) -> None:
+    registry = create_default_registry()
+    policy = PermissionPolicy()
+
+    read_env = policy.decide(registry.get("read_file").spec, arguments={"path": ".env"}, workspace=tmp_path)
+    write_env = policy.decide(registry.get("write_file").spec, arguments={"path": ".env"}, workspace=tmp_path)
+    read_example = policy.decide(registry.get("read_file").spec, arguments={"path": ".env.example"}, workspace=tmp_path)
+
+    assert read_env.mode == PermissionMode.DENY
+    assert write_env.mode == PermissionMode.DENY
+    assert read_example.mode == PermissionMode.ALLOW
+
+
+def test_command_classifier_blocks_windows_destructive_commands() -> None:
+    classifier = CommandSafetyClassifier()
+
+    assert classifier.classify("Remove-Item . -Recurse -Force").mode == PermissionMode.DENY
+    assert classifier.classify("rd /s build").mode == PermissionMode.DENY
+    assert classifier.classify("reg delete HKCU\\Software\\Demo").mode == PermissionMode.DENY
 
 
 def test_permission_policy_respects_explicit_ask(tmp_path) -> None:

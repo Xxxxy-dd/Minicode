@@ -141,6 +141,9 @@ def memory_prompt_payload(memory: MemoryRecord) -> dict[str, Any]:
         "source_run_id": memory.source_run_id,
         "tags": memory.tags,
         "reason": memory.reason,
+        "status": memory.status.value,
+        "admission_reason": memory.admission_reason,
+        "metadata": memory.metadata,
     }
 
 

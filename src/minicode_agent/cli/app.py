@@ -6,9 +6,10 @@ from rich.console import Console
 from rich.table import Table
 
 from minicode_agent.agent import AgentLoop
+from minicode_agent.cli.preview_renderer import render_preview_text
 from minicode_agent.config import MiniCodeConfig, normalize_memory_reflection_mode
 from minicode_agent.harness import HarnessRunner, ablation_config_names, load_ablation_config_file, resolve_ablation_config, run_all_configs
-from minicode_agent.memory import MemoryKind, MemoryStore, default_memory_db_path
+from minicode_agent.memory import MemoryKind, MemoryStatus, MemoryStore, default_memory_db_path
 from minicode_agent.models import OpenAICompatibleClient
 from minicode_agent.skills import SkillError, SkillRegistry, SkillRouter, default_skill_registry
 from minicode_agent.trace import TraceStore, default_trace_db_path
@@ -359,33 +360,33 @@ def list_memory(
         help="Workspace directory that contains the memory db.",
     ),
     kind: MemoryKind | None = typer.Option(None, "--kind", help="Memory kind to show."),
+    status: MemoryStatus | None = typer.Option(None, "--status", help="Memory status to show."),
+    tag: list[str] | None = typer.Option(None, "--tag", help="Filter by tag. Repeat for multiple tags."),
+    include_stale: bool = typer.Option(False, "--include-stale", help="Include stale records in search/list output."),
     limit: int = typer.Option(50, "--limit", help="Maximum records to show."),
     query: str | None = typer.Option(None, "--query", help="Search memory content and tags."),
     json_output: bool = typer.Option(False, "--json", help="Print records as JSON."),
 ) -> None:
     """List project memories."""
     store = MemoryStore(default_memory_db_path(workspace))
-    records = store.search(query, limit=limit) if query else store.list(kind=kind, limit=limit)
+    records = (
+        store.search(query, limit=limit, kind=kind, status=status, tags=tag, include_stale=include_stale)
+        if query
+        else store.list(kind=kind, status=status, include_stale=include_stale, limit=limit)
+    )
+    if tag and not query:
+        wanted = {item.lower() for item in tag}
+        records = [record for record in records if wanted <= {item.lower() for item in record.tags}]
     if json_output:
         console.print(json.dumps([record.model_dump() for record in records], ensure_ascii=False, indent=2), markup=False)
         return
 
-    table = Table(title="MiniCode Memory")
-    table.add_column("Kind")
-    table.add_column("Confidence")
-    table.add_column("Source")
-    table.add_column("Reason")
-    table.add_column("Content")
-    for record in records:
-        table.add_row(
-            record.kind.value,
-            f"{record.confidence:.2f}",
-            record.source_run_id or "",
-            record.reason or "",
-            record.content,
-        )
     console.print(f"[dim]memory_backend: {store.backend} ({store.db_path})[/dim]")
-    console.print(table)
+    if not records:
+        console.print("[dim](no memories)[/dim]")
+        return
+    for record in records:
+        console.print(format_memory_record(record), markup=False)
 
 
 @memory_app.command("add")
@@ -401,6 +402,7 @@ def add_memory(
     confidence: float = typer.Option(0.8, "--confidence", help="Confidence from 0 to 1."),
     source_run_id: str | None = typer.Option(None, "--source-run-id", help="Run id that produced this memory."),
     tag: list[str] | None = typer.Option(None, "--tag", help="Tag for the memory. Repeat for multiple tags."),
+    reason: str | None = typer.Option(None, "--reason", help="Admission/source reason for the memory."),
 ) -> None:
     """Add a memory record if it is admissible and not a duplicate."""
     store = MemoryStore(default_memory_db_path(workspace))
@@ -411,6 +413,8 @@ def add_memory(
             confidence=confidence,
             source_run_id=source_run_id,
             tags=tag or [],
+            reason=reason or "manual memory add",
+            admission_reason="manual add",
         )
     except ValueError as exc:
         console.print(f"[red]Memory rejected:[/red] {exc}")
@@ -418,6 +422,26 @@ def add_memory(
     console.print(f"[dim]memory_backend: {store.backend} ({store.db_path})[/dim]")
     console.print("added" if inserted else "duplicate")
     console.print(f"id: {record.id}")
+
+
+@memory_app.command("stale")
+def stale_memory(
+    memory_id: str = typer.Argument(..., help="Memory id to mark stale."),
+    workspace: Path = typer.Option(
+        Path.cwd(),
+        "--workspace",
+        "-w",
+        help="Workspace directory that contains the memory db.",
+    ),
+    reason: str | None = typer.Option(None, "--reason", help="Reason this memory is stale."),
+) -> None:
+    """Mark a memory record as stale without deleting it."""
+    store = MemoryStore(default_memory_db_path(workspace))
+    if not store.mark_status(memory_id, MemoryStatus.STALE, reason=reason or "manual stale mark"):
+        console.print(f"[red]Memory not found:[/red] {memory_id}")
+        raise typer.Exit(code=1)
+    console.print(f"[dim]memory_backend: {store.backend} ({store.db_path})[/dim]")
+    console.print(f"stale: {memory_id}")
 
 
 @memory_app.command("delete")
@@ -512,6 +536,9 @@ def run_tool(
         else:
             console.print("[dim](empty output)[/dim]")
         return
+    preview = observation.metadata.get("preview")
+    if isinstance(preview, dict):
+        console.print(safe_console_text(render_preview_text(preview)), markup=False)
     console.print(f"[red]Tool failed:[/red] {observation.error}")
     raise typer.Exit(code=1)
 
@@ -522,6 +549,37 @@ def main() -> None:
 
 def safe_console_text(text: str) -> str:
     return text.lstrip("\ufeff")
+
+
+def summarize_metadata(metadata: dict) -> str:
+    if not metadata:
+        return ""
+    pieces = []
+    for key in ("rule", "path", "status_reason", "conflict_notes"):
+        value = metadata.get(key)
+        if value:
+            pieces.append(f"{key}={value}")
+    if not pieces:
+        pieces = [f"{key}={value}" for key, value in list(metadata.items())[:2]]
+    text = "; ".join(str(piece) for piece in pieces)
+    return text[:120]
+
+
+def format_memory_record(record) -> str:
+    lines = [
+        (
+            f"- id={record.id} kind={record.kind.value} status={record.status.value} "
+            f"confidence={record.confidence:.2f} source={record.source_run_id or '(none)'}"
+        ),
+        f"  tags={', '.join(record.tags) or '(none)'}",
+        f"  reason={record.reason or '(none)'}",
+        f"  admission={record.admission_reason or '(none)'}",
+    ]
+    metadata = summarize_metadata(record.metadata)
+    if metadata:
+        lines.append(f"  metadata={metadata}")
+    lines.append(f"  content={record.content}")
+    return "\n".join(lines)
 
 
 def read_patch_file(path: Path) -> str:

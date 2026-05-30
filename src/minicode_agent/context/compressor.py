@@ -5,7 +5,6 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from minicode_agent.core.state import TaskState
-from minicode_agent.tools.registry import create_default_registry
 from minicode_agent.tools.types import ToolStateEffect
 
 
@@ -19,17 +18,15 @@ class CompressionResult(BaseModel):
     compressed_observations: int = 0
     compressed_observation_ids: list[str] = Field(default_factory=list)
     compressed_turns: list[int] = Field(default_factory=list)
+    evidence_refs: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class TaskStateCompressor:
     """Deterministic context compressor that preserves structured task state."""
 
-    def __init__(self, max_summary_chars: int = 1200) -> None:
+    def __init__(self, max_summary_chars: int = 1200, tool_effects: dict[str, set[ToolStateEffect]] | None = None) -> None:
         self.max_summary_chars = max_summary_chars
-        self.tool_effects = {
-            tool.spec.name: set(tool.spec.state_effects)
-            for tool in create_default_registry().list()
-        }
+        self.tool_effects = tool_effects or {}
 
     def compress(
         self,
@@ -84,6 +81,7 @@ class TaskStateCompressor:
             compressed_observations=len(observations),
             compressed_observation_ids=observation_ids(observations),
             compressed_turns=observation_turns(observations),
+            evidence_refs=evidence_refs(observations),
         )
 
     def fallback_compress(
@@ -107,6 +105,7 @@ class TaskStateCompressor:
             compressed_observations=len(observations),
             compressed_observation_ids=observation_ids(observations),
             compressed_turns=observation_turns(observations),
+            evidence_refs=evidence_refs(observations),
         )
 
 
@@ -137,6 +136,22 @@ def observation_turns(observations: list[dict[str, Any]]) -> list[int]:
         if isinstance(turn, int):
             turns.append(turn)
     return turns
+
+
+def evidence_refs(observations: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    refs: list[dict[str, Any]] = []
+    for observation in observations:
+        ref: dict[str, Any] = {
+            "id": observation.get("id"),
+            "turn": observation.get("turn"),
+            "tool": observation.get("tool") or observation.get("payload", {}).get("tool"),
+            "ok": observation.get("ok", observation.get("payload", {}).get("ok")),
+        }
+        path = observation_path(observation)
+        if path:
+            ref["path"] = path
+        refs.append({key: value for key, value in ref.items() if value is not None})
+    return refs
 
 
 def extract_known_fact(tool: str, result: str, path: str | None, effects: set[ToolStateEffect] | None = None) -> str | None:

@@ -19,6 +19,7 @@ from minicode_agent.cli.live_ui import (
     summarize_turn,
     wrap_text,
 )
+from minicode_agent.cli.preview_renderer import render_preview_text
 from minicode_agent.core.state import AgentPhase, AgentState, TaskState
 
 
@@ -212,6 +213,82 @@ def test_approval_prompt_only_asks_for_yes_or_no(monkeypatch) -> None:
     assert "write_file" not in text
     assert "secret.txt" not in text
     assert "hidden content" not in text
+
+
+def test_approval_prompt_pauses_status_before_input(monkeypatch) -> None:
+    console = Console(record=True, width=120)
+
+    class FakeStatus:
+        def __init__(self) -> None:
+            self.stopped = False
+            self.started = False
+
+        def stop(self) -> None:
+            self.stopped = True
+
+        def start(self) -> None:
+            self.started = True
+
+    status = FakeStatus()
+
+    def input_with_status_check(prompt):
+        assert status.stopped is True
+        console.print(prompt)
+        return "n"
+
+    monkeypatch.setattr(console, "input", input_with_status_check)
+    approved = build_approval_callback(console, status)(
+        "append_file",
+        {"path": "test.py", "content": "print('hi')"},
+        "Tool requires approval by its permission mode.",
+        {
+            "summary": "Create test.py: +1 lines.",
+            "operation": "append",
+            "paths": ["test.py"],
+            "stats": {"insertions": 1, "deletions": 0, "hunks": 1},
+            "diff": "--- a/test.py\n+++ b/test.py\n@@ -0,0 +1 @@\n+print('hi')\n",
+            "display_blocks": [
+                {
+                    "kind": "append",
+                    "title": "Append preview",
+                    "content": "--- a/test.py\n+++ b/test.py\n@@ -0,0 +1 @@\n+print('hi')\n",
+                }
+            ],
+        },
+    )
+
+    text = console.export_text()
+    assert approved is False
+    assert status.started is True
+    assert "Pending write: append_file" in text
+    assert "operation=append" in text
+    assert "是否批准？[y/N]" in text
+
+
+def test_preview_renderer_prefers_structured_display_blocks() -> None:
+    preview = {
+        "summary": "Append to app.py: +2 lines.",
+        "operation": "append",
+        "paths": ["app.py"],
+        "stats": {"insertions": 2, "deletions": 0, "hunks": 1},
+        "diff": "legacy diff",
+        "display_blocks": [
+            {
+                "kind": "append",
+                "title": "Append preview",
+                "content": "@@ append after end of file @@\n def one():\n+def two():",
+            }
+        ],
+        "risk_notes": [],
+    }
+
+    text = render_preview_text(preview, heading="Pending write: append_file")
+
+    assert "Pending write: append_file" in text
+    assert "operation=append" in text
+    assert "[Append preview]" in text
+    assert "+def two():" in text
+    assert "legacy diff" not in text
 
 
 def test_summarize_turn_prefers_direct_final_answer() -> None:

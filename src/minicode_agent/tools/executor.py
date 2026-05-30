@@ -1,11 +1,14 @@
-import re
 import time
-from typing import Any
+from typing import Any, Callable
 
 from minicode_agent.permissions.policy import PermissionPolicy
-from minicode_agent.trace.store import TraceStore
+from minicode_agent.trace.store import TraceStore, safe_trace_payload
+from minicode_agent.tools.base import ToolError
+from minicode_agent.tools.preview import build_write_preview
 from minicode_agent.tools.registry import ToolRegistry
-from minicode_agent.tools.types import PermissionMode, ToolContext, ToolObservation
+from minicode_agent.tools.types import PermissionMode, ToolContext, ToolObservation, ToolStateEffect
+
+ApprovalCallback = Callable[..., bool]
 
 
 class ToolExecutor:
@@ -29,6 +32,7 @@ class ToolExecutor:
         context: ToolContext,
         arguments: dict[str, Any] | None = None,
         approved: bool = False,
+        approval_callback: ApprovalCallback | None = None,
     ) -> ToolObservation:
         arguments = arguments or {}
         tool = self.registry.get(name)
@@ -37,7 +41,7 @@ class ToolExecutor:
             "tool_requested",
             {
                 "tool": name,
-                "arguments": safe_payload(arguments),
+                "arguments": safe_trace_payload(arguments),
                 "approved": approved,
             },
         )
@@ -67,6 +71,39 @@ class ToolExecutor:
             )
             self._trace_observation(observation, started_at)
             return observation
+
+        preview = None
+        if ToolStateEffect.MARKS_MODIFIED_FILE in tool.spec.state_effects:
+            try:
+                preview = build_write_preview(name, context.resolved_workspace, arguments)
+            except ToolError as exc:
+                observation = ToolObservation(
+                    tool_call_id=f"{name}_preview_failed",
+                    ok=False,
+                    error=str(exc),
+                    metadata={
+                        "permission": decision.mode.value,
+                        "permission_reason": decision.reason,
+                        "tool": name,
+                        "preview": "failed",
+                    },
+                )
+                self._trace_observation(observation, started_at)
+                return observation
+            if preview is not None:
+                self._trace(
+                    "write_preview",
+                    {
+                        "tool": name,
+                        "preview": preview.metadata(),
+                        "permission": decision.mode.value,
+                        "reason": decision.reason,
+                    },
+                )
+
+        if decision.mode == PermissionMode.ASK and not approved and approval_callback is not None:
+            approved = request_approval(approval_callback, name, arguments, decision.reason, preview.metadata() if preview else None)
+
         if decision.mode == PermissionMode.ASK and not approved:
             observation = ToolObservation(
                 tool_call_id=f"{name}_approval_required",
@@ -76,10 +113,30 @@ class ToolExecutor:
                     "permission": decision.mode.value,
                     "permission_reason": decision.reason,
                     "tool": name,
+                    "preview": preview.metadata() if preview else None,
+                },
+            )
+            self._trace(
+                "approval_decision",
+                {
+                    "tool": name,
+                    "approved": False,
+                    "reason": decision.reason,
+                    "preview": preview.metadata() if preview else None,
                 },
             )
             self._trace_observation(observation, started_at)
             return observation
+        if decision.mode == PermissionMode.ASK and approved:
+            self._trace(
+                "approval_decision",
+                {
+                    "tool": name,
+                    "approved": True,
+                    "reason": decision.reason,
+                    "preview": preview.metadata() if preview else None,
+                },
+            )
 
         enriched_context = context.model_copy(update={"trace_store": self.trace_store, "run_id": self.run_id})
         observation = tool.run(enriched_context, arguments)
@@ -89,8 +146,10 @@ class ToolExecutor:
                 "permission_reason": decision.reason,
                 "approved": approved,
                 "tool": name,
+                "preview": preview.metadata() if preview else None,
             }
         )
+        observation.truncated = observation.truncated or bool(observation.metadata.get("truncated"))
         self._trace_observation(observation, started_at)
         return observation
 
@@ -106,7 +165,7 @@ class ToolExecutor:
                 "tool_call_id": observation.tool_call_id,
                 "ok": observation.ok,
                 "error": observation.error,
-                "metadata": safe_payload(observation.metadata),
+                "metadata": safe_trace_payload(observation.metadata),
                 "output_chars": len(observation.output),
                 "truncated": observation.truncated,
                 "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
@@ -114,37 +173,14 @@ class ToolExecutor:
         )
 
 
-def safe_payload(value: Any) -> Any:
-    if isinstance(value, dict):
-        cleaned = {}
-        for key, item in value.items():
-            cleaned_value = redact_value(key, safe_payload(item))
-            if cleaned_value is None or cleaned_value == {} or cleaned_value == []:
-                continue
-            cleaned[key] = cleaned_value
-        return cleaned
-    if isinstance(value, list):
-        return [item for item in (safe_payload(item) for item in value) if item is not None]
-    if isinstance(value, str):
-        return redact_secret_patterns(value)
-    return value
-
-
-def redact_value(key: str, value: Any) -> Any:
-    lowered = key.lower()
-    if any(token in lowered for token in ("secret", "token", "password", "key")):
-        return "[redacted]"
-    return value
-
-
-def redact_secret_patterns(value: str) -> str:
-    patterns = (
-        r"(?i)(authorization:\s*bearer\s+)[^\s]+",
-        r"(?i)(api[_-]?key\s*=\s*)[^\s]+",
-        r"(?i)(openai_api_key\s*=\s*)[^\s]+",
-        r"(?i)(anthropic_api_key\s*=\s*)[^\s]+",
-    )
-    redacted = value
-    for pattern in patterns:
-        redacted = re.sub(pattern, r"\1[redacted]", redacted)
-    return redacted
+def request_approval(
+    approval_callback: ApprovalCallback,
+    name: str,
+    arguments: dict[str, Any],
+    reason: str,
+    preview: dict[str, Any] | None,
+) -> bool:
+    try:
+        return bool(approval_callback(name, arguments, reason, preview))
+    except TypeError:
+        return bool(approval_callback(name, arguments, reason))

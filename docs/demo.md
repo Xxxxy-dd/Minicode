@@ -35,14 +35,26 @@ E:\conda\envs\minicode\Scripts\minicode.exe tools run inspect_repo --workspace .
 
 This shows the declared tool runtime and the structured repository summary used by planner/debug flows.
 
+## Write Preview And Approval
+
+```powershell
+E:\conda\envs\minicode\Scripts\minicode.exe tools run write_file --workspace . --path scratch.txt --content "hello"
+E:\conda\envs\minicode\Scripts\minicode.exe tools run write_file --workspace . --path scratch.txt --content "hello" --approved
+E:\conda\envs\minicode\Scripts\minicode.exe trace --workspace .
+```
+
+The first command shows a diff preview and refuses to write without approval. The approved command executes after the preview/approval events are recorded in trace.
+
 ## Memory
 
 ```powershell
 E:\conda\envs\minicode\Scripts\minicode.exe memory add "Use python -m pytest tests before finishing." --kind project_memory --confidence 0.9
 E:\conda\envs\minicode\Scripts\minicode.exe memory list --query pytest
+E:\conda\envs\minicode\Scripts\minicode.exe memory list --kind failure_memory
+E:\conda\envs\minicode\Scripts\minicode.exe memory stale <memory-id> --reason "superseded by current test command"
 ```
 
-This demonstrates local durable memory and retrieval.
+This demonstrates local durable memory, explainable recall metadata, kind/status/tag filtering, and manual stale marking.
 
 ## Run The Harness
 

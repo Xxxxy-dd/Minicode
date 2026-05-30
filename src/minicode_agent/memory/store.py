@@ -10,6 +10,8 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field, field_validator
 
+from minicode_agent.security.redaction import contains_secret, safe_payload
+
 
 class MemoryKind(StrEnum):
     PROJECT = "project_memory"
@@ -18,10 +20,10 @@ class MemoryKind(StrEnum):
     FAILURE = "failure_memory"
 
 
-SECRET_PATTERNS = (
-    re.compile(r"(?i)(api[_-]?key|token|secret|password)\s*[:=]\s*\S+"),
-    re.compile(r"sk-[A-Za-z0-9_-]{12,}"),
-)
+class MemoryStatus(StrEnum):
+    ACTIVE = "active"
+    STALE = "stale"
+    CONFLICT = "conflict"
 
 
 class MemoryRecord(BaseModel):
@@ -35,6 +37,8 @@ class MemoryRecord(BaseModel):
     tags: list[str] = Field(default_factory=list)
     reason: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+    status: MemoryStatus = MemoryStatus.ACTIVE
+    admission_reason: str | None = None
 
     @field_validator("content")
     @classmethod
@@ -72,9 +76,16 @@ class MemoryStore:
         tags: list[str] | None = None,
         reason: str | None = None,
         metadata: dict[str, Any] | None = None,
+        admission_reason: str | None = None,
     ) -> tuple[MemoryRecord, bool]:
-        if contains_secret(content):
-            raise ValueError("memory content appears to contain a secret")
+        reject_secret_field(content, "content")
+        reject_secret_field(reason or "", "reason")
+        for tag in tags or []:
+            reject_secret_field(tag, "tag")
+        safe_metadata = safe_payload(metadata or {})
+        notes = conflict_notes(self.list(limit=200), MemoryKind(kind), content)
+        if notes:
+            safe_metadata["conflict_notes"] = notes
         record = MemoryRecord(
             kind=MemoryKind(kind),
             content=content,
@@ -82,7 +93,9 @@ class MemoryStore:
             source_run_id=source_run_id,
             tags=tags or [],
             reason=reason,
-            metadata=metadata or {},
+            metadata=safe_metadata,
+            status=MemoryStatus.CONFLICT if notes else MemoryStatus.ACTIVE,
+            admission_reason=admission_reason or "accepted",
         )
         normalized = normalize_memory_content(record.content)
         existing = self.find_duplicate(record.kind, normalized)
@@ -101,9 +114,10 @@ class MemoryStore:
                 """
                 INSERT INTO memory_records (
                     id, kind, normalized_content, content, confidence,
-                    source_run_id, created_at, updated_at, tags_json, reason, metadata_json
+                    source_run_id, created_at, updated_at, tags_json, reason, metadata_json,
+                    status, admission_reason
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record.id,
@@ -117,51 +131,88 @@ class MemoryStore:
                     json.dumps(record.tags, ensure_ascii=False),
                     record.reason,
                     json.dumps(record.metadata, ensure_ascii=False),
+                    record.status.value,
+                    record.admission_reason,
                 ),
             )
         return record, True
 
-    def list(self, kind: MemoryKind | str | None = None, limit: int = 50) -> list[MemoryRecord]:
+    def list(
+        self,
+        kind: MemoryKind | str | None = None,
+        limit: int = 50,
+        status: MemoryStatus | str | None = None,
+        include_stale: bool = True,
+    ) -> list[MemoryRecord]:
         if self.backend == "jsonl":
             records = self._read_jsonl_records()
             if kind is not None:
                 memory_kind = MemoryKind(kind)
                 records = [record for record in records if record.kind == memory_kind]
+            records = filter_status(records, status=status, include_stale=include_stale)
             records.sort(key=lambda record: (record.updated_at, record.created_at), reverse=True)
             return records[:limit]
 
         query = """
-            SELECT id, kind, content, confidence, source_run_id, created_at, updated_at, tags_json, reason, metadata_json
+            SELECT id, kind, content, confidence, source_run_id, created_at, updated_at, tags_json, reason, metadata_json,
+                   status, admission_reason
             FROM memory_records
         """
         params: list[Any] = []
+        conditions: list[str] = []
         if kind is not None:
-            query += " WHERE kind = ?"
+            conditions.append("kind = ?")
             params.append(MemoryKind(kind).value)
+        if status is not None:
+            conditions.append("status = ?")
+            params.append(MemoryStatus(status).value)
+        elif not include_stale:
+            conditions.append("status != ?")
+            params.append(MemoryStatus.STALE.value)
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
         query += " ORDER BY updated_at DESC, rowid DESC LIMIT ?"
         params.append(limit)
         with self._connect() as conn:
             rows = conn.execute(query, tuple(params)).fetchall()
         return [self._row_to_record(row) for row in rows]
 
-    def search(self, query: str, limit: int = 8) -> list[MemoryRecord]:
+    def search(
+        self,
+        query: str,
+        limit: int = 8,
+        kind: MemoryKind | str | None = None,
+        status: MemoryStatus | str | None = None,
+        tags: list[str] | None = None,
+        include_stale: bool = False,
+    ) -> list[MemoryRecord]:
         terms = {term for term in re.findall(r"[\w.-]+", query.lower()) if len(term) >= 3}
-        records = self.list(limit=200)
+        records = self.list(kind=kind, status=status, include_stale=include_stale, limit=200)
+        if tags:
+            wanted = {tag.lower() for tag in tags}
+            records = [record for record in records if wanted <= {tag.lower() for tag in record.tags}]
         if not terms:
             return records[:limit]
 
         scored: list[tuple[float, MemoryRecord]] = []
         for record in records:
-            haystack = f"{record.kind.value} {record.content} {' '.join(record.tags)}".lower()
-            content_hits = sum(1 for term in terms if term in record.content.lower())
-            tag_hits = sum(1 for term in terms if term in " ".join(record.tags).lower())
-            kind_hits = sum(1 for term in terms if term in record.kind.value)
-            hit_score = content_hits + (tag_hits * 2) + (kind_hits * 1.5)
-            if hit_score:
-                score = hit_score + record.confidence
+            score, reason = score_memory(query, record)
+            if reason != "no query match":
                 scored.append((score, record))
         scored.sort(key=lambda item: (item[0], item[1].updated_at), reverse=True)
         return [record for _, record in scored[:limit]]
+
+    def recall(self, query: str, limit: int = 8) -> list[dict[str, Any]]:
+        records = self.search(query, limit=limit)
+        return [
+            {
+                "record": record,
+                "reason": reason,
+                "score": score,
+            }
+            for record in records
+            for score, reason in [score_memory(query, record)]
+        ]
 
     def delete(self, memory_id: str) -> bool:
         if self.backend == "jsonl":
@@ -180,6 +231,55 @@ class MemoryStore:
             cursor = conn.execute("DELETE FROM memory_records WHERE id = ?", (memory_id,))
         return cursor.rowcount > 0
 
+    def mark_status(self, memory_id: str, status: MemoryStatus | str, reason: str | None = None) -> bool:
+        memory_status = MemoryStatus(status)
+        if self.backend == "jsonl":
+            records = self._read_jsonl_records()
+            changed = False
+            now = datetime.now(UTC).isoformat()
+            with self.jsonl_path.open("w", encoding="utf-8") as file:
+                for record in records:
+                    if record.id == memory_id:
+                        record.status = memory_status
+                        record.updated_at = now
+                        if reason:
+                            record.metadata["status_reason"] = reason
+                        changed = True
+                    payload = record.model_dump()
+                    payload["normalized_content"] = normalize_memory_content(record.content)
+                    file.write(json.dumps(payload, ensure_ascii=False) + "\n")
+            return changed
+
+        updates = ["status = ?", "updated_at = ?"]
+        params: list[Any] = [memory_status.value, datetime.now(UTC).isoformat()]
+        if reason:
+            record = self.get(memory_id)
+            if record is None:
+                return False
+            metadata = dict(record.metadata)
+            metadata["status_reason"] = reason
+            updates.append("metadata_json = ?")
+            params.append(json.dumps(safe_payload(metadata), ensure_ascii=False))
+        params.append(memory_id)
+        with self._connect() as conn:
+            cursor = conn.execute(f"UPDATE memory_records SET {', '.join(updates)} WHERE id = ?", tuple(params))
+        return cursor.rowcount > 0
+
+    def get(self, memory_id: str) -> MemoryRecord | None:
+        if self.backend == "jsonl":
+            return next((record for record in self._read_jsonl_records() if record.id == memory_id), None)
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT id, kind, content, confidence, source_run_id, created_at, updated_at, tags_json, reason, metadata_json,
+                       status, admission_reason
+                FROM memory_records
+                WHERE id = ?
+                """,
+                (memory_id,),
+            ).fetchone()
+        return self._row_to_record(row) if row else None
+
     def find_duplicate(self, kind: MemoryKind, normalized_content: str) -> MemoryRecord | None:
         if self.backend == "jsonl":
             for record in self._read_jsonl_records():
@@ -190,7 +290,8 @@ class MemoryStore:
         with self._connect() as conn:
             row = conn.execute(
                 """
-                SELECT id, kind, content, confidence, source_run_id, created_at, updated_at, tags_json, reason, metadata_json
+                SELECT id, kind, content, confidence, source_run_id, created_at, updated_at, tags_json, reason, metadata_json,
+                       status, admission_reason
                 FROM memory_records
                 WHERE kind = ? AND normalized_content = ?
                 """,
@@ -220,7 +321,10 @@ class MemoryStore:
             )
             self._ensure_column(conn, "reason", "TEXT")
             self._ensure_column(conn, "metadata_json", "TEXT NOT NULL DEFAULT '{}'")
+            self._ensure_column(conn, "status", "TEXT NOT NULL DEFAULT 'active'")
+            self._ensure_column(conn, "admission_reason", "TEXT")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_memory_records_kind ON memory_records(kind)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_memory_records_status ON memory_records(status)")
 
     def _connect(self):
         import sqlite3
@@ -239,6 +343,8 @@ class MemoryStore:
             tags=json.loads(row[7]),
             reason=row[8] if len(row) > 8 else None,
             metadata=json.loads(row[9]) if len(row) > 9 else {},
+            status=MemoryStatus(row[10]) if len(row) > 10 and row[10] else MemoryStatus.ACTIVE,
+            admission_reason=row[11] if len(row) > 11 else None,
         )
 
     def _ensure_column(self, conn, name: str, definition: str) -> None:
@@ -263,8 +369,68 @@ def normalize_memory_content(content: str) -> str:
     return " ".join(content.strip().casefold().split())
 
 
-def contains_secret(content: str) -> bool:
-    return any(pattern.search(content) for pattern in SECRET_PATTERNS)
+def reject_secret_field(value: str, field: str) -> None:
+    if contains_secret(value):
+        raise ValueError(f"memory {field} appears to contain a secret")
+
+
+def filter_status(
+    records: list[MemoryRecord],
+    *,
+    status: MemoryStatus | str | None,
+    include_stale: bool,
+) -> list[MemoryRecord]:
+    if status is not None:
+        memory_status = MemoryStatus(status)
+        return [record for record in records if record.status == memory_status]
+    if not include_stale:
+        return [record for record in records if record.status != MemoryStatus.STALE]
+    return records
+
+
+def score_memory(query: str, record: MemoryRecord) -> tuple[float, str]:
+    terms = {term for term in re.findall(r"[\w.-]+", query.lower()) if len(term) >= 3}
+    if not terms:
+        return record.confidence, "recent active memory"
+    content_hits = sum(1 for term in terms if term in record.content.lower())
+    tag_hits = sum(1 for term in terms if term in " ".join(record.tags).lower())
+    kind_hits = sum(1 for term in terms if term in record.kind.value)
+    hit_score = content_hits + (tag_hits * 2) + (kind_hits * 1.5)
+    matched = [
+        term
+        for term in sorted(terms)
+        if term in record.content.lower() or term in " ".join(record.tags).lower() or term in record.kind.value
+    ]
+    if not hit_score:
+        return record.confidence, "no query match"
+    return hit_score + record.confidence, f"matched query terms: {', '.join(matched[:5])}"
+
+
+def conflict_notes(existing_records: list[MemoryRecord], kind: MemoryKind, content: str) -> list[str]:
+    normalized = normalize_memory_content(content)
+    notes: list[str] = []
+    for record in existing_records:
+        if record.kind != kind or record.status != MemoryStatus.ACTIVE:
+            continue
+        old = normalize_memory_content(record.content)
+        if old == normalized:
+            continue
+        if looks_contradictory(old, normalized):
+            notes.append(f"possible conflict with {record.id}")
+    return notes
+
+
+def looks_contradictory(left: str, right: str) -> bool:
+    if not shared_significant_terms(left, right):
+        return False
+    negations = ("not ", "no ", "never ", "不要", "不能", "不使用", "禁用")
+    return any(token in left for token in negations) != any(token in right for token in negations)
+
+
+def shared_significant_terms(left: str, right: str) -> bool:
+    left_terms = {term for term in re.findall(r"[\w.-]+", left) if len(term) >= 4}
+    right_terms = {term for term in re.findall(r"[\w.-]+", right) if len(term) >= 4}
+    return bool(left_terms & right_terms)
 
 
 def default_memory_db_path(workspace: Path) -> Path:

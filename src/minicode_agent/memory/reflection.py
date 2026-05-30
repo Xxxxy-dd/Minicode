@@ -3,7 +3,8 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from minicode_agent.core.state import AgentPhase, AgentState
-from minicode_agent.memory.store import MemoryKind, MemoryRecord, contains_secret
+from minicode_agent.memory.store import MemoryKind, MemoryRecord
+from minicode_agent.security.redaction import contains_secret, safe_payload
 
 
 @dataclass(frozen=True)
@@ -109,7 +110,8 @@ class DeterministicReflectionEngine:
                 source_run_id=candidate.source_run_id,
                 tags=candidate.tags,
                 reason=candidate.reason,
-                metadata=candidate.metadata,
+                metadata=safe_payload(candidate.metadata),
+                admission_reason="accepted",
             ),
             "accepted",
         )

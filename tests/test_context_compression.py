@@ -8,6 +8,7 @@ from minicode_agent.models import build_planning_prompt
 from minicode_agent.models import ModelMessage, ModelResponse
 from minicode_agent.runtime import RuntimeContext
 from minicode_agent.tools.registry import create_default_registry
+from minicode_agent.tools.types import ToolStateEffect
 
 
 class MockModelClient:
@@ -23,7 +24,10 @@ class MockModelClient:
 
 
 def test_task_state_compressor_preserves_structured_fields() -> None:
-    compressor = TaskStateCompressor(max_summary_chars=300)
+    compressor = TaskStateCompressor(
+        max_summary_chars=300,
+        tool_effects={"read_file": {ToolStateEffect.RECORDS_PATH_FACT}},
+    )
     state = TaskState(goal="inspect project", constraints=["stay safe"], next_actions=["read docs"])
     observations = [
         {
@@ -55,6 +59,10 @@ def test_task_state_compressor_preserves_structured_fields() -> None:
     assert result.task_state.history_summary
     assert result.compressed_observation_ids == ["obs_1", "obs_2"]
     assert result.compressed_turns == [1, 2]
+    assert result.evidence_refs == [
+        {"id": "obs_1", "turn": 1, "tool": "read_file", "ok": True, "path": "README.md"},
+        {"id": "obs_2", "turn": 2, "tool": "read_file", "ok": False, "path": "missing.md"},
+    ]
 
 
 def test_task_state_compressor_fallback_preserves_goal() -> None:
@@ -110,6 +118,7 @@ def test_agent_loop_compresses_long_model_observation(tmp_path) -> None:
     assert compressed[0].payload["ratio"] > 0
     assert compressed[0].payload["compressed_observation_ids"] == ["obs_1"]
     assert compressed[0].payload["compressed_turns"] == [1]
+    assert compressed[0].payload["evidence_refs"][0]["path"] == "README.md"
     assert "history_summary" in compressed[0].payload["task_state"]
     assert "context_compressor" in model.messages[1][1].content
     assert '"task_state"' in model.messages[1][1].content

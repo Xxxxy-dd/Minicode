@@ -299,7 +299,12 @@ def format_append(
     if resolved in {"text", "markdown"}:
         return append_with_separator(before_text.rstrip(), appended_text.lstrip(), "\n\n", trailing_newline=True)
     if resolved == "code":
-        return append_with_separator(before_text.rstrip(), appended_text.lstrip("\n"), "\n", trailing_newline=True)
+        return append_with_separator(
+            before_text.rstrip(),
+            appended_text.lstrip("\n"),
+            code_append_separator(path_arg, before_text, appended_text),
+            trailing_newline=True,
+        )
     return append_with_separator(before_text, appended_text, "\n", trailing_newline=True)
 
 
@@ -350,6 +355,39 @@ def append_with_separator(before_text: str, appended_text: str, separator: str, 
     if trailing_newline and result and not result.endswith("\n"):
         result += "\n"
     return result
+
+
+def code_append_separator(path_arg: str, before_text: str, appended_text: str) -> str:
+    suffix = Path(path_arg).suffix.lower()
+    incoming = appended_text.lstrip()
+    if not before_text.strip() or not incoming:
+        return "\n"
+    if suffix == ".py" and starts_python_top_level_block(incoming):
+        return "\n\n"
+    if suffix in {".js", ".jsx", ".ts", ".tsx", ".java", ".go", ".rs", ".cs", ".rb", ".php"} and starts_common_top_level_block(incoming):
+        return "\n\n"
+    if suffix in {".css", ".html"} and before_text.rstrip():
+        return "\n\n"
+    return "\n"
+
+
+def starts_python_top_level_block(value: str) -> bool:
+    first = first_nonempty_line(value)
+    return first.startswith(("def ", "async def ", "class ", "@"))
+
+
+def starts_common_top_level_block(value: str) -> bool:
+    first = first_nonempty_line(value)
+    prefixes = ("function ", "class ", "export ", "import ", "const ", "let ", "var ", "public ", "private ", "func ", "fn ")
+    return first.startswith(prefixes)
+
+
+def first_nonempty_line(value: str) -> str:
+    for line in value.splitlines():
+        stripped = line.strip()
+        if stripped:
+            return stripped
+    return ""
 
 
 def missing_separator_suffix(before_text: str, separator: str) -> str:

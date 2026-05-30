@@ -6,6 +6,8 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
+from minicode_agent.security.redaction import safe_payload as safe_trace_payload
+
 
 class TraceEvent(BaseModel):
     id: str = Field(default_factory=lambda: uuid4().hex)
@@ -31,7 +33,7 @@ class TraceStore:
         return self.jsonl_path if self.backend == "jsonl" else self.db_path
 
     def append(self, run_id: str, event_type: str, payload: dict[str, Any] | None = None) -> TraceEvent:
-        event = TraceEvent(run_id=run_id, event_type=event_type, payload=payload or {})
+        event = TraceEvent(run_id=run_id, event_type=event_type, payload=safe_trace_payload(payload or {}))
         if self.backend == "jsonl":
             with self.jsonl_path.open("a", encoding="utf-8") as file:
                 file.write(event.model_dump_json() + "\n")

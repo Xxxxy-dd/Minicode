@@ -41,20 +41,70 @@ class PathSandbox:
         return PermissionDecision(mode=PermissionMode.ALLOW, reason="Path is inside workspace.")
 
 
+class SensitivePathPolicy:
+    """Blocks paths that are likely to contain credentials or local machine secrets."""
+
+    sensitive_names = {
+        ".env",
+        ".env.local",
+        ".env.development",
+        ".env.production",
+        ".netrc",
+        "id_rsa",
+        "id_dsa",
+        "id_ecdsa",
+        "id_ed25519",
+        "known_hosts",
+        "authorized_keys",
+    }
+    sensitive_dirs = {".ssh", ".gnupg"}
+    sensitive_suffixes = {".pem", ".key", ".p12", ".pfx"}
+
+    def validate_arguments(self, arguments: dict[str, Any], path_argument_names: tuple[str, ...]) -> PermissionDecision | None:
+        for key in path_argument_names:
+            value = arguments.get(key)
+            if value is None:
+                continue
+            decision = self.validate_path(str(value))
+            if decision.mode == PermissionMode.DENY:
+                return decision
+        return None
+
+    def validate_path(self, requested_path: str) -> PermissionDecision:
+        if is_sensitive_path(requested_path):
+            return PermissionDecision(
+                mode=PermissionMode.DENY,
+                reason=f"Sensitive path is blocked by policy: {requested_path}",
+            )
+        return PermissionDecision(mode=PermissionMode.ALLOW, reason="Path is not sensitive.")
+
+
 class CommandSafetyClassifier:
     """Classifies shell commands that should never be executed by the agent."""
 
     blocked_patterns = (
         r"\brm\s+-rf\b",
         r"\bdel\s+/[sq]\b",
+        r"\berase\s+/[sq]\b",
+        r"\brd\s+/s\b",
         r"\brmdir\s+/s\b",
+        r"\bremove-item\b.*-recurse\b",
+        r"\bremove-item\b.*-force\b",
         r"\bformat\b",
         r"\bdiskpart\b",
         r"\bshutdown\b",
         r"\breboot\b",
+        r"\brestart-computer\b",
+        r"\bstop-computer\b",
+        r"\bset-executionpolicy\b",
+        r"\breg\s+delete\b",
         r"\bgit\s+push\b",
         r"\bcurl\b.*\|",
         r"\bwget\b.*\|",
+        r"\binvoke-webrequest\b.*\|",
+        r"\binvoke-restmethod\b.*\|",
+        r"\biwr\b.*\|",
+        r"\birm\b.*\|",
         r"\.env\b.*\b(curl|wget|scp|sftp)\b",
     )
 
@@ -79,6 +129,9 @@ class PermissionPolicy:
             sandbox_decision = PathSandbox(workspace, path_arg_names).validate_arguments(arguments)
             if sandbox_decision is not None:
                 return sandbox_decision
+            sensitive_path_decision = SensitivePathPolicy().validate_arguments(arguments, path_arg_names)
+            if sensitive_path_decision is not None:
+                return sensitive_path_decision
         command_text = command_text_from_arguments(arguments, tool.command_arg_names)
         if command_text is not None:
             command_decision = CommandSafetyClassifier().classify(command_text)
@@ -104,3 +157,15 @@ def command_text_from_arguments(arguments: dict[str, Any], command_arg_names: tu
     if command is not None:
         return str(command)
     return None
+
+
+def is_sensitive_path(requested_path: str) -> bool:
+    path = Path(requested_path)
+    parts = {part.lower() for part in path.parts}
+    name = path.name.lower()
+    suffix = path.suffix.lower()
+    return (
+        bool(parts & SensitivePathPolicy.sensitive_dirs)
+        or name in SensitivePathPolicy.sensitive_names
+        or suffix in SensitivePathPolicy.sensitive_suffixes
+    )

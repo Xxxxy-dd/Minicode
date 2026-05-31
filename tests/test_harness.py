@@ -1,10 +1,11 @@
 import json
 import sys
+import subprocess
 
 from typer.testing import CliRunner
 
 from minicode_agent.cli.app import app
-from minicode_agent.harness import HarnessRunner, HarnessTask, SuccessCommand
+from minicode_agent.harness import ForbiddenToolAssertion, HarnessRunner, HarnessTask, SuccessCommand, TeamAssertion, TraceAssertion
 from minicode_agent.harness.runner import run_success_command
 
 
@@ -97,6 +98,22 @@ def test_harness_expected_fail_passes_when_command_fails(tmp_path) -> None:
     assert not result.success_results[0].passed
 
 
+def test_harness_expected_fail_without_success_uses_assertions(tmp_path) -> None:
+    (tmp_path / "README.md").write_text("# Demo\n", encoding="utf-8")
+    task = HarnessTask(
+        id="expected_fail_without_success",
+        workspace=tmp_path,
+        prompt="inspect project",
+        expected="fail",
+        trace_assertions=[TraceAssertion(event_type="run_started")],
+    )
+
+    result = HarnessRunner(tmp_path).run_task(task)
+
+    assert result.passed
+    assert result.assertion_results[0].passed
+
+
 def test_harness_analysis_only_ignores_success_commands(tmp_path) -> None:
     (tmp_path / "README.md").write_text("# Demo\n", encoding="utf-8")
     task = HarnessTask(
@@ -110,6 +127,91 @@ def test_harness_analysis_only_ignores_success_commands(tmp_path) -> None:
     result = HarnessRunner(tmp_path).run_task(task)
 
     assert result.passed
+
+
+def test_harness_analysis_only_requires_assertions(tmp_path) -> None:
+    (tmp_path / "README.md").write_text("# Demo\n", encoding="utf-8")
+    task = HarnessTask(
+        id="analysis_assertion_failure",
+        workspace=tmp_path,
+        prompt="inspect project",
+        expected="analysis_only",
+        trace_assertions=[TraceAssertion(event_type="missing_event")],
+    )
+
+    result = HarnessRunner(tmp_path).run_task(task)
+
+    assert not result.passed
+    assert result.assertion_results[0].kind == "trace"
+
+
+def test_harness_trace_and_forbidden_tool_assertions(tmp_path) -> None:
+    (tmp_path / "README.md").write_text("# Demo\n", encoding="utf-8")
+    task = HarnessTask(
+        id="trace_assertions",
+        workspace=tmp_path,
+        prompt="inspect project",
+        expected="analysis_only",
+        trace_assertions=[TraceAssertion(event_type="run_started")],
+        forbidden_tools=[ForbiddenToolAssertion(tool="write_file")],
+    )
+
+    result = HarnessRunner(tmp_path).run_task(task)
+
+    assert result.passed
+    assert {assertion.kind for assertion in result.assertion_results} == {"trace", "forbidden_tool"}
+
+
+def test_harness_team_assertions(tmp_path) -> None:
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
+    (tmp_path / "tracked.txt").write_text("hello\n", encoding="utf-8")
+    subprocess.run(["git", "add", "tracked.txt"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "init"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    (tmp_path / "tracked.txt").write_text("hello again\n", encoding="utf-8")
+    task = HarnessTask(
+        id="team_assertions",
+        workspace=tmp_path,
+        prompt="Review current diff and report risks, changed files, and test suggestions.",
+        expected="analysis_only",
+        trace_assertions=[TraceAssertion(event_type="team_finished")],
+        team_assertions=[TeamAssertion(role="reviewer", require_evidence=True, require_merge_blocker=True)],
+    )
+
+    result = HarnessRunner(tmp_path, config="full").run_task(task)
+
+    assert result.passed
+    assert all(assertion.passed for assertion in result.assertion_results)
+
+
+def test_harness_team_assertion_fails_when_subagents_disabled(tmp_path) -> None:
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
+    (tmp_path / "tracked.txt").write_text("hello\n", encoding="utf-8")
+    subprocess.run(["git", "add", "tracked.txt"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "init"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    (tmp_path / "tracked.txt").write_text("hello again\n", encoding="utf-8")
+    task = HarnessTask(
+        id="team_disabled",
+        workspace=tmp_path,
+        prompt="Review current diff and report risks, changed files, and test suggestions.",
+        expected="analysis_only",
+        team_assertions=[TeamAssertion(role="reviewer", require_evidence=True, require_merge_blocker=True)],
+    )
+
+    result = HarnessRunner(tmp_path, config="baseline").run_task(task)
+
+    assert not result.passed
+    assert result.assertion_results[0].kind == "team"
+    assert not result.assertion_results[0].passed
 
 
 def test_harness_writes_markdown_report(tmp_path) -> None:

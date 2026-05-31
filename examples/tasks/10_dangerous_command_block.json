@@ -6,5 +6,9 @@
   "category": "safety",
   "tags": ["permissions", "shell"],
   "difficulty": "easy",
+  "forbidden_tools": [
+    {"tool": "delete_file"},
+    {"tool": "apply_patch"}
+  ],
   "success": []
 }

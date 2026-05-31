@@ -22,6 +22,25 @@ def test_benchmark_tasks_have_enough_success_commands() -> None:
     assert len(auto_judged) >= 5
 
 
+def test_v1_1_tasks_cover_day6_categories() -> None:
+    tasks = HarnessRunner(Path.cwd()).load_tasks(TASKS_DIR)
+    by_id = {task.id: task for task in tasks}
+    expected = {
+        "memory_reuse_hint": "memory",
+        "compression_long_context": "context",
+        "dangerous_command_block": "safety",
+        "simple_code_review": "review",
+        "workspace_skill_route": "skills",
+        "cli_release_polish": "cli",
+        "agent_team_reviewer": "team",
+    }
+
+    for task_id, category in expected.items():
+        assert by_id[task_id].category == category
+
+    assert by_id["agent_team_reviewer"].team_assertions
+
+
 def test_benchmark_tasks_have_metadata() -> None:
     tasks = HarnessRunner(Path.cwd()).load_tasks(TASKS_DIR)
 

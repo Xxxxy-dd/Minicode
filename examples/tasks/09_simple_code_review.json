@@ -6,5 +6,11 @@
   "category": "review",
   "tags": ["subagent", "diff"],
   "difficulty": "easy",
+  "trace_assertions": [
+    {"event_type": "team_role_completed", "min_count": 1, "payload_contains": {"role": "reviewer"}}
+  ],
+  "team_assertions": [
+    {"role": "reviewer", "require_evidence": true, "require_merge_blocker": true}
+  ],
   "success": []
 }

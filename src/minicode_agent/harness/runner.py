@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from minicode_agent.agent import AgentLoop
+from minicode_agent.harness.assertions import evaluate_assertions
 from minicode_agent.harness.configs import AblationConfig, ablation_config_names, load_ablation_config_file, resolve_ablation_config
 from minicode_agent.harness.types import EvalResult, HarnessTask, SuccessCommand, SuccessResult
 from minicode_agent.models import OpenAICompatibleClient
@@ -56,9 +57,12 @@ class HarnessRunner:
             **self.ablation_config.agent_kwargs(),
         ).run()
         success_results = [run_success_command(command, workspace) for command in task.success]
+        trace_events = runtime.trace_store.list_events(runtime.run_id)
+        assertion_results = evaluate_assertions(task, workspace, trace_events)
         agent_ok = result.state.current_phase.value == "done"
         command_passed = all(success.passed for success in success_results)
-        passed = evaluate_outcome(task, agent_ok, command_passed)
+        assertions_passed = all(assertion.passed for assertion in assertion_results)
+        passed = evaluate_outcome(task, agent_ok, command_passed, assertions_passed, has_success_commands=bool(task.success))
         runtime_seconds = round(time.perf_counter() - started_at, 3)
         runtime.trace_store.append(
             runtime.run_id,
@@ -70,6 +74,7 @@ class HarnessRunner:
                 "passed": passed,
                 "runtime_seconds": runtime_seconds,
                 "success_count": len(success_results),
+                "assertion_count": len(assertion_results),
             },
         )
         return EvalResult(
@@ -87,6 +92,7 @@ class HarnessRunner:
             agent_ok=agent_ok,
             runtime_seconds=runtime_seconds,
             success_results=success_results,
+            assertion_results=assertion_results,
             metrics=result.state.metrics.model_dump(),
             config_features=self.ablation_config.model_dump(),
             memory_summary=result.state.task_state.history_summary,
@@ -260,6 +266,8 @@ def render_report(results: list[EvalResult], config: AblationConfig | None = Non
                 lines.append(f"  - stdout: {success.stdout_summary}")
             if success.stderr_summary:
                 lines.append(f"  - stderr: {success.stderr_summary}")
+        for assertion in result.assertion_results:
+            lines.append(f"- assertion[{assertion.kind}] `{assertion.target}` passed={assertion.passed}: {assertion.detail}")
         lines.append("")
     return "\n".join(lines)
 
@@ -375,12 +383,14 @@ def write_machine_reports(output_dir: Path, results: list[EvalResult]) -> None:
         "memory_duplicates",
         "memory_llm_filtered",
         "memory_summary",
+        "assertions_passed",
     ]
     with csv_path.open("w", encoding="utf-8", newline="") as handle:
         writer = DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
         for result in results:
             metrics = result.metrics
+            assertions_passed = all(assertion.passed for assertion in result.assertion_results)
             writer.writerow(
                 {
                     "config": result.config,
@@ -402,16 +412,25 @@ def write_machine_reports(output_dir: Path, results: list[EvalResult]) -> None:
                     "memory_duplicates": metrics.get("memory_duplicates", 0),
                     "memory_llm_filtered": metrics.get("memory_llm_filtered", 0),
                     "memory_summary": result.memory_summary or "",
+                    "assertions_passed": assertions_passed,
                 }
             )
 
 
-def evaluate_outcome(task: HarnessTask, agent_ok: bool, command_passed: bool) -> bool:
+def evaluate_outcome(
+    task: HarnessTask,
+    agent_ok: bool,
+    command_passed: bool,
+    assertions_passed: bool = True,
+    has_success_commands: bool = True,
+) -> bool:
     if task.expected == "analysis_only":
-        return agent_ok
+        return agent_ok and assertions_passed
     if task.expected == "fail":
-        return agent_ok and not command_passed
-    return agent_ok and command_passed
+        if not has_success_commands:
+            return agent_ok and assertions_passed
+        return agent_ok and not command_passed and assertions_passed
+    return agent_ok and command_passed and assertions_passed
 
 
 def summarize_stream(value: str, max_chars: int = 300) -> str:

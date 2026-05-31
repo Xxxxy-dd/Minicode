@@ -16,11 +16,36 @@ class SuccessCommand(BaseModel):
     timeout_seconds: int = 30
 
 
+class TraceAssertion(BaseModel):
+    event_type: str
+    min_count: int = 1
+    payload_contains: dict[str, str] = Field(default_factory=dict)
+
+
+class ForbiddenToolAssertion(BaseModel):
+    tool: str
+
+
+class FileDiffAssertion(BaseModel):
+    path: str
+    should_change: bool = True
+
+
+class TeamAssertion(BaseModel):
+    role: str
+    require_evidence: bool = True
+    require_merge_blocker: bool = False
+
+
 class HarnessTask(BaseModel):
     id: str
     workspace: Path = Path(".")
     prompt: str
     success: list[SuccessCommand] = Field(default_factory=list)
+    trace_assertions: list[TraceAssertion] = Field(default_factory=list)
+    forbidden_tools: list[ForbiddenToolAssertion] = Field(default_factory=list)
+    file_diff_assertions: list[FileDiffAssertion] = Field(default_factory=list)
+    team_assertions: list[TeamAssertion] = Field(default_factory=list)
     expected: ExpectedOutcome = ExpectedOutcome.PASS
     category: str = "general"
     tags: list[str] = Field(default_factory=list)
@@ -47,6 +72,13 @@ class SuccessResult(BaseModel):
     stderr_summary: str = ""
 
 
+class AssertionResult(BaseModel):
+    kind: str
+    target: str
+    passed: bool
+    detail: str = ""
+
+
 class EvalResult(BaseModel):
     task_id: str
     config: str
@@ -62,6 +94,7 @@ class EvalResult(BaseModel):
     agent_ok: bool
     runtime_seconds: float
     success_results: list[SuccessResult] = Field(default_factory=list)
+    assertion_results: list[AssertionResult] = Field(default_factory=list)
     metrics: dict = Field(default_factory=dict)
     config_features: dict = Field(default_factory=dict)
     memory_summary: str | None = None

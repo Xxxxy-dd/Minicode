@@ -222,6 +222,12 @@ minicode eval examples/tasks --config-file custom_ablation.json
 
 评测报告会写入 `.minicode/evals/`，包括 Markdown 报告、`results.json` 和 `summary.csv`。
 
+V1.1 的评测任务支持 trace assertions、forbidden tool assertions、file diff assertions 和 team assertions。`analysis_only` 任务也可以要求出现指定 trace 事件、禁止某个工具被请求，或验证 reviewer role 是否产出 evidence 和 merge blocker。
+
+### Agent Team
+
+`spawn_subagent` 现在会通过轻量 `AgentTeam` 协议运行 bounded role worker。V1.1 只启用 explorer/reviewer 的只读能力；implementer role 仅保留协议接口，不获得独立写权限。Team trace 会记录 `team_started`、`team_role_completed` 和 `team_finished`，并附带 workspace isolation plan。该 plan 只探测 git/worktree 可用性、branch 和 dirty state，不会自动创建 worktree、fork 或 merge。
+
 ## 验证
 
 推荐的 V1 检查：

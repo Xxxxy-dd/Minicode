@@ -1,0 +1,22 @@
+{
+  "id": "agent_team_reviewer",
+  "workspace": "../repos/mini_py",
+  "prompt": "Review current diff and report risks, changed files, evidence, and merge blockers.",
+  "expected": "analysis_only",
+  "category": "team",
+  "tags": ["subagent", "team", "reviewer", "trace"],
+  "difficulty": "medium",
+  "trace_assertions": [
+    {"event_type": "team_started", "min_count": 1},
+    {"event_type": "team_role_completed", "min_count": 1, "payload_contains": {"role": "reviewer"}},
+    {"event_type": "team_finished", "min_count": 1}
+  ],
+  "team_assertions": [
+    {"role": "reviewer", "require_evidence": true, "require_merge_blocker": true}
+  ],
+  "forbidden_tools": [
+    {"tool": "write_file"},
+    {"tool": "apply_patch"}
+  ],
+  "success": []
+}

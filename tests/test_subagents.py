@@ -5,7 +5,7 @@ from minicode_agent.agent import AgentLoop
 from minicode_agent.cli.app import app
 from minicode_agent.core.state import AgentPhase
 from minicode_agent.runtime import RuntimeContext
-from minicode_agent.subagents import SubagentRequest, SubagentRole, SubagentRunner
+from minicode_agent.subagents import AgentTeam, SubagentRequest, SubagentRole, SubagentRunner
 from minicode_agent.tools.executor import ToolExecutor
 from minicode_agent.tools.registry import create_default_registry
 from minicode_agent.tools.types import ToolContext
@@ -78,6 +78,8 @@ def test_reviewer_subagent_reviews_git_diff(tmp_path) -> None:
     assert result.allowed_tools == ["git_diff", "git_status", "read_file", "search_code"]
     assert "spawn_subagent" in result.denied_tools
     assert result.changed_files == ["tracked.txt"]
+    assert result.evidence
+    assert result.risks == ["Reviewer did not find test evidence in the collected diff/status."]
     assert result.test_suggestions == ["Run the relevant test suite before merging."]
 
 
@@ -121,6 +123,8 @@ def test_spawn_subagent_tool_metadata_includes_role_limits(tmp_path) -> None:
     assert observation.ok
     assert observation.metadata["role"] == "explorer"
     assert observation.metadata["max_steps"] == 1
+    assert observation.metadata["team_id"].startswith("team_")
+    assert observation.metadata["team_workspace_plan"]["will_create_worktree"] is False
     assert "list_files" in observation.metadata["allowed_tools"]
     assert "spawn_subagent" in observation.metadata["denied_tools"]
 
@@ -171,6 +175,9 @@ def test_agent_loop_review_task_uses_reviewer_subagent(tmp_path) -> None:
     event_types = [event.event_type for event in events]
     assert "subagent_started" in event_types
     assert "subagent_finished" in event_types
+    assert "team_started" in event_types
+    assert "team_role_completed" in event_types
+    assert "team_finished" in event_types
 
 
 def test_agent_loop_does_not_trigger_reviewer_for_generic_review_word(tmp_path) -> None:
@@ -181,3 +188,41 @@ def test_agent_loop_does_not_trigger_reviewer_for_generic_review_word(tmp_path) 
 
     assert result.state.current_phase == AgentPhase.DONE
     assert result.state.metrics.subagent_calls == 0
+
+
+def test_agent_team_records_workspace_plan_and_merge_blocker(tmp_path) -> None:
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
+    (tmp_path / "tracked.txt").write_text("hello\n", encoding="utf-8")
+    subprocess.run(["git", "add", "tracked.txt"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "init"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    (tmp_path / "tracked.txt").write_text("hello again\n", encoding="utf-8")
+
+    team = AgentTeam(tmp_path).run(
+        "review diff",
+        [SubagentRequest(role=SubagentRole.REVIEWER, task="review diff", max_steps=2)],
+    )
+
+    assert team.team_id.startswith("team_")
+    assert team.workspace_plan.repo_detected
+    assert team.workspace_plan.dirty
+    assert not team.workspace_plan.will_create_worktree
+    assert not team.workspace_plan.will_merge
+    assert team.results[0].role == SubagentRole.REVIEWER
+    assert "V1.1 does not create worktrees or perform automatic merges." in team.results[0].merge_blockers
+
+
+def test_implementer_role_is_protocol_only(tmp_path) -> None:
+    team = AgentTeam(tmp_path).run(
+        "implement change",
+        [SubagentRequest(role=SubagentRole.IMPLEMENTER, task="implement change", max_steps=1)],
+    )
+
+    assert not team.ok
+    assert team.results[0].tool_calls == 0
+    assert team.results[0].stopped_reason == "role_disabled"
+    assert team.results[0].merge_blockers == ["implementer role has no independent write permission in V1.1"]

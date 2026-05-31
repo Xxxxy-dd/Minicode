@@ -1,0 +1,13 @@
+{
+  "id": "cli_release_polish",
+  "workspace": "../repos/mini_py",
+  "prompt": "Prepare V1.1 release polish notes for the CLI and docs.",
+  "expected": "analysis_only",
+  "category": "cli",
+  "tags": ["release", "cli", "docs"],
+  "difficulty": "easy",
+  "trace_assertions": [
+    {"event_type": "skill_selected", "min_count": 1}
+  ],
+  "success": []
+}

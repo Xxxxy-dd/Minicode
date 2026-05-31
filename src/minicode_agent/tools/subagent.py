@@ -3,7 +3,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from minicode_agent.subagents import SubagentRequest, SubagentRunner
+from minicode_agent.subagents import AgentTeam, SubagentRequest
 from minicode_agent.tools.base import BaseTool, ToolError
 from minicode_agent.tools.types import PermissionMode, RiskLevel, ToolContext, ToolSpec
 
@@ -29,14 +29,19 @@ class SpawnSubagentTool(BaseTool):
             request = SubagentRequest.model_validate(arguments)
         except ValidationError as exc:
             raise ToolError(str(exc)) from exc
-        result = SubagentRunner(
+        team = AgentTeam(
             context.resolved_workspace,
             trace_store=context.trace_store,
             parent_run_id=context.run_id,
-        ).run(request)
+        ).run(request.task, [request])
+        result = team.results[0] if team.results else None
+        if result is None:
+            raise ToolError("team produced no role results")
         metadata = result.model_dump()
         metadata.update(
             {
+                "team_id": team.team_id,
+                "team_workspace_plan": team.workspace_plan.model_dump(),
                 "role": result.role.value,
                 "max_steps": request.max_steps,
                 "allowed_tools": result.allowed_tools,

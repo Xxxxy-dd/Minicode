@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 import re
+from typing import Any
 
+from minicode_agent.tools.types import ToolObservation
 from minicode_agent.subagents.types import SubagentRequest, SubagentResult, SubagentRole
 from minicode_agent.tools.types import ToolContext
 from minicode_agent.trace import TraceStore
@@ -38,6 +40,8 @@ class SubagentRunner:
         executor = ToolExecutor(registry, trace_store=self.trace_store, run_id=self.parent_run_id)
         context = ToolContext(workspace=self.workspace)
         findings: list[str] = []
+        evidence: list[dict[str, Any]] = []
+        observations: list[tuple[str, ToolObservation]] = []
         tool_calls = 0
         ok = True
 
@@ -46,6 +50,17 @@ class SubagentRunner:
                 break
             observation = executor.execute(tool_name, context, arguments)
             tool_calls += 1
+            observations.append((tool_name, observation))
+            evidence.append(
+                {
+                    "type": "tool_observation",
+                    "tool": tool_name,
+                    "ok": observation.ok,
+                    "metadata": observation.metadata,
+                    "output_chars": len(observation.output),
+                    "error": observation.error,
+                }
+            )
             if observation.ok:
                 findings.append(format_finding(tool_name, observation.output))
             else:
@@ -53,18 +68,20 @@ class SubagentRunner:
                 findings.append(f"{tool_name} failed: {observation.error}")
 
         stopped_reason = "max_steps" if tool_calls >= request.max_steps else "planned_actions_exhausted"
-        review = reviewer_review(findings) if request.role == SubagentRole.REVIEWER else {}
+        review = reviewer_review(observations) if request.role == SubagentRole.REVIEWER else {}
         result = SubagentResult(
             role=request.role,
             task=request.task,
             ok=ok,
             summary=summarize_findings(request.role, findings),
             findings=findings,
+            evidence=evidence,
             allowed_tools=allowed_tools,
             denied_tools=denied_tools,
             changed_files=review.get("changed_files", []),
             risks=review.get("risks", []),
             test_suggestions=review.get("test_suggestions", []),
+            merge_blockers=review.get("merge_blockers", []),
             tool_calls=tool_calls,
             stopped_reason=stopped_reason,
         )
@@ -98,6 +115,8 @@ def denied_subagent_tools(role: SubagentRole) -> list[str]:
 
 
 def planned_actions(request: SubagentRequest) -> list[tuple[str, dict]]:
+    if request.role == SubagentRole.IMPLEMENTER:
+        return []
     if request.role == SubagentRole.REVIEWER:
         return [("git_diff", {"stat": False}), ("git_status", {})]
     if request.path and request.pattern:
@@ -124,17 +143,54 @@ def summarize_findings(role: SubagentRole, findings: list[str]) -> str:
     return f"{role.value} completed {len(findings)} read-only tool call(s)."
 
 
-def reviewer_review(findings: list[str]) -> dict[str, list[str]]:
-    text = "\n".join(findings)
-    changed_files = sorted(set(re.findall(r"\b(?:a|b)/([^\s]+)", text)))
+def reviewer_review(observations: list[tuple[str, ToolObservation]]) -> dict[str, list[str]]:
+    outputs = {tool_name: observation.output for tool_name, observation in observations if observation.ok}
+    diff = outputs.get("git_diff", "")
+    status = outputs.get("git_status", "")
+    combined = "\n".join(outputs.values())
+    changed_files = sorted(set(diff_changed_files(diff) | status_changed_files(status)))
     risks: list[str] = []
-    if "TODO" in text or "pass" in text:
+    merge_blockers: list[str] = []
+    if re.search(r"\b(TODO|FIXME|pass)\b", diff):
         risks.append("Diff contains placeholder-like content.")
+    if "rm -rf" in diff or "del /" in diff:
+        risks.append("Diff or status references dangerous deletion commands.")
+    if ".env" in combined or "PRIVATE KEY" in combined or "api_key" in combined.lower() or "token" in combined.lower():
+        risks.append("Diff may expose sensitive file paths or secret-like content.")
+    if re.search(r"deleted file mode|^D\s+", diff + "\n" + status, re.MULTILINE):
+        risks.append("Diff or status includes deleted files.")
     if not changed_files:
         risks.append("No changed files were detected from git diff output.")
+        merge_blockers.append("reviewer could not identify changed files from git diff")
+    if changed_files and not re.search(r"\b(test|pytest|unittest|ruff|mypy)\b", diff, re.IGNORECASE):
+        risks.append("Reviewer did not find test evidence in the collected diff/status.")
     test_suggestions = ["Run the relevant test suite before merging."] if changed_files else []
     return {
         "changed_files": changed_files,
         "risks": risks,
         "test_suggestions": test_suggestions,
+        "merge_blockers": merge_blockers,
     }
+
+
+def diff_changed_files(diff: str) -> set[str]:
+    paths: set[str] = set()
+    for match in re.finditer(r"^diff --git a/(.+?) b/(.+)$", diff, re.MULTILINE):
+        paths.add(match.group(2).strip())
+    for match in re.finditer(r"^\+\+\+ b/(.+)$", diff, re.MULTILINE):
+        paths.add(match.group(1).strip())
+    return paths
+
+
+def status_changed_files(status: str) -> set[str]:
+    paths: set[str] = set()
+    for line in status.splitlines():
+        if len(line) <= 3:
+            continue
+        if line[2] != " ":
+            continue
+        path = line[3:].strip()
+        if " -> " in path:
+            path = path.rsplit(" -> ", 1)[-1]
+        paths.add(path.replace("\\", "/"))
+    return paths

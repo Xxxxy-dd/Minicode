@@ -1,0 +1,13 @@
+{
+  "id": "workspace_skill_route",
+  "workspace": "../repos/mini_py",
+  "prompt": "Use the workspace skill routing path to inspect project code style guidance.",
+  "expected": "analysis_only",
+  "category": "skills",
+  "tags": ["skill", "workspace"],
+  "difficulty": "easy",
+  "trace_assertions": [
+    {"event_type": "skill_selected", "min_count": 1}
+  ],
+  "success": []
+}

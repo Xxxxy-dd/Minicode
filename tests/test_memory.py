@@ -305,6 +305,109 @@ def test_agent_loop_traces_memory_recall_reason(tmp_path) -> None:
     assert "matched query terms" in recall.payload["records"][0]["reason"]
 
 
+def test_agent_loop_always_recalls_user_preferences(tmp_path) -> None:
+    (tmp_path / "README.md").write_text("# Demo\n", encoding="utf-8")
+    runtime = RuntimeContext.create(tmp_path, run_id="agent_memory_preference_test")
+    memory, _ = runtime.memory_store.add(
+        MemoryKind.USER,
+        "User prefers Chinese replies.",
+        confidence=0.9,
+        source_run_id="manual",
+        tags=["preference", "language"],
+    )
+
+    AgentLoop(runtime, "检查项目", enable_skills=False, enable_memory=True).run()
+
+    events = runtime.trace_store.list_events("agent_memory_preference_test")
+    recall = next(event for event in events if event.event_type == "memory_recalled")
+    records = recall.payload["records"]
+    assert any(record["id"] == memory.id for record in records)
+    assert any(record["reason"] == "active user preference" for record in records)
+
+
+def test_model_planner_receives_active_user_preferences(tmp_path) -> None:
+    (tmp_path / "README.md").write_text("# Demo\n", encoding="utf-8")
+    runtime = RuntimeContext.create(tmp_path, run_id="agent_model_preference_test")
+    runtime.memory_store.add(
+        MemoryKind.USER,
+        "User prefers Chinese replies.",
+        confidence=0.9,
+        source_run_id="manual",
+        tags=["preference", "language"],
+    )
+
+    class PreferenceAwareModel:
+        def __init__(self) -> None:
+            self.messages = []
+
+        def complete(self, messages):
+            self.messages.append(messages)
+            return ModelResponse(
+                content="""
+                {
+                  "summary": "偏好已进入规划上下文。",
+                  "selected_skill": null,
+                  "next_actions": ["Report the final answer."],
+                  "stop": true,
+                  "final_answer": "偏好已进入规划上下文。",
+                  "action": null
+                }
+                """,
+                input_tokens=1,
+                output_tokens=1,
+            )
+
+    model = PreferenceAwareModel()
+
+    AgentLoop(runtime, "检查项目", model_client=model, enable_skills=False, enable_memory=True).run()
+
+    assert model.messages
+    assert "User prefers Chinese replies." in model.messages[0][1].content
+    assert '"relevant_memory"' in model.messages[0][1].content
+    assert '"response_language": "Chinese"' in model.messages[0][1].content
+
+
+def test_model_planner_receives_active_chat_session_context(tmp_path) -> None:
+    (tmp_path / "README.md").write_text("# Demo\n", encoding="utf-8")
+    runtime = RuntimeContext.create(tmp_path, run_id="agent_model_session_context_test")
+    runtime.memory_store.add(
+        MemoryKind.USER,
+        "Recent chat context:\nUser: 先检查 README\nMiniCode: README 已检查。",
+        confidence=0.85,
+        source_run_id="chat_session",
+        tags=["session", "conversation"],
+    )
+
+    class SessionAwareModel:
+        def __init__(self) -> None:
+            self.messages = []
+
+        def complete(self, messages):
+            self.messages.append(messages)
+            return ModelResponse(
+                content="""
+                {
+                  "summary": "上下文已进入规划。",
+                  "selected_skill": null,
+                  "next_actions": ["Report the final answer."],
+                  "stop": true,
+                  "final_answer": "上下文已进入规划。",
+                  "action": null
+                }
+                """,
+                input_tokens=1,
+                output_tokens=1,
+            )
+
+    model = SessionAwareModel()
+
+    AgentLoop(runtime, "按刚才说的继续", model_client=model, enable_skills=False, enable_memory=True).run()
+
+    assert model.messages
+    assert "Recent chat context:" in model.messages[0][1].content
+    assert "先检查 README" in model.messages[0][1].content
+
+
 def test_parse_llm_memory_candidates_accepts_structured_json() -> None:
     candidates = parse_llm_memory_candidates(
         """

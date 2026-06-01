@@ -2,7 +2,9 @@ import json
 
 from typing import Any
 
+from minicode_agent.capabilities import build_capability_profile
 from minicode_agent.core.state import TaskState
+from minicode_agent.intent import contains_cjk
 from minicode_agent.memory import MemoryRecord
 from minicode_agent.models.client import ModelMessage
 from minicode_agent.skills import SkillDefinition
@@ -23,22 +25,23 @@ def build_planning_prompt(
     memories: list[MemoryRecord] | None = None,
     task_state: TaskState | None = None,
 ) -> list[ModelMessage]:
+    capability_profile = build_capability_profile(tool_registry=registry)
     tools = [
         {
-            "name": tool.spec.name,
-            "description": tool.spec.description,
-            "risk_level": tool.spec.risk_level.value,
-            "permission": tool.spec.permission.value,
-            "intents": [intent.value for intent in tool.spec.intents],
-            "input_schema": tool.spec.input_schema,
+            **tool,
+            "input_schema": registry.get(tool["name"]).spec.input_schema,
         }
-        for tool in registry.list()
+        for tool in capability_profile["tools"]
     ]
+    user_language = detect_user_language(goal)
+    response_language = response_language_from_memories(memories or [], user_language)
     system = (
         "You are MiniCode Agent, a local coding agent runtime with a planner, tools, skills, memory, trace, subagents, and evaluation harness. "
         "First classify the user's request as direct_answer or coding_task. "
-        "Use direct_answer for greetings, identity questions, capability/help questions, language preferences, conceptual explanations, or clarifying questions that do not need workspace inspection. "
-        "For direct_answer, set stop=true, action=null, tailor the answer to the exact intent instead of reusing a fixed template, and set final_answer to a short, direct answer in the user's language. "
+        "Use direct_answer for greetings, identity questions, capability/help questions, tools/skills/commands questions, language preferences, conceptual explanations, or clarifying questions that do not need workspace inspection. "
+        "For direct_answer, set stop=true, action=null, tailor the answer to the exact intent instead of reusing a fixed template, and set final_answer to a short, direct answer in response_language. "
+        "For coding_task completion, final_answer must also use response_language unless the user explicitly asks for another language. "
+        "When answering about tools, skills, commands, or capabilities, use the capability_profile facts instead of generic claims. "
         "Use coding_task when the user asks you to inspect, modify, test, review, document, or evaluate workspace files. "
         "Return only JSON with fields: summary, selected_skill, next_actions, stop, final_answer, action. "
         "Use null for final_answer when stop=false and always use a string for final_answer when stop=true. "
@@ -51,6 +54,8 @@ def build_planning_prompt(
     )
     user_payload = {
         "goal": goal,
+        "user_language": user_language,
+        "response_language": response_language,
         "task_state": task_state.model_dump() if task_state else {"goal": goal},
         "known_files": known_files[:50],
         "recent_observations": (observations or [])[-10:],
@@ -61,6 +66,7 @@ def build_planning_prompt(
         },
         "active_skills": [skill_prompt_payload(skill) for skill in (skills or [])],
         "relevant_memory": memory_prompt_payloads(memories or []),
+        "capability_profile": capability_profile,
         "available_tools": tools,
         "response_example": {
             "summary": "Inspect project documentation first.",
@@ -80,11 +86,14 @@ def build_planning_prompt(
         },
         "direct_answer_policy": {
             "classification": "If the user can be answered without reading files or running tools, use direct_answer.",
-            "language": "Reply in the user's language unless they request a different language.",
+            "language": f"Reply in {response_language} unless the user explicitly requests a different language.",
             "tone": "Be concise, natural, and specific to the question. Do not reuse the same answer for related but different questions.",
             "intent_examples": {
                 "identity": "Say who you are briefly; do not list every capability unless asked.",
                 "capabilities": "List concrete capabilities and limits without turning it into usage instructions.",
+                "tools": "Use capability_profile.tools and describe the actual registered tools.",
+                "skills": "Use capability_profile.skills and describe the actual available skills.",
+                "commands": "Use capability_profile.commands and describe the actual chat commands.",
                 "task_help": "Describe practical tasks you can help with and what the user can ask next.",
                 "usage_help": "Explain commands, CLI usage, or next steps; focus on operation rather than identity.",
                 "limitations": "State current limits honestly, such as needing tools for workspace inspection and permissions for risky actions.",
@@ -164,3 +173,22 @@ def truncate_memory_content(content: str) -> str:
     if len(content) <= MAX_MEMORY_CONTENT_CHARS:
         return content
     return content[:MAX_MEMORY_CONTENT_CHARS] + "\n[truncated]"
+
+
+def detect_user_language(text: str) -> str:
+    return "Chinese" if contains_cjk(text) else "English"
+
+
+def response_language_from_memories(memories: list[MemoryRecord], fallback: str) -> str:
+    for memory in memories:
+        if memory.kind.value != "user_memory":
+            continue
+        content = memory.content.casefold()
+        tags = {tag.casefold() for tag in memory.tags}
+        if "preference" not in tags:
+            continue
+        if "chinese" in content or "中文" in memory.content:
+            return "Chinese"
+        if "english" in content or "英文" in memory.content:
+            return "English"
+    return fallback

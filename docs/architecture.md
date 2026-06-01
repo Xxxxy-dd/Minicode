@@ -46,3 +46,12 @@ User task
 - Memory write safety lives in `MemoryStore`, so manual adds, deterministic reflection, and LLM reflection share the same admission gate, status model, and secret redaction.
 - Subagents are tools, not independent uncontrolled peers.
 - Harness configs act as feature switches for ablation: `baseline`, `skill_only`, `memory_skill`, `memory_llm`, `full`, `full_llm_memory`.
+
+## Day8 Governance Notes
+
+- Chat slash commands are handled in `cli/chat_commands.py`, separate from `cli/live_ui.py`. Day8 adds `/tools`, `/config`, and `/last` beside the existing `/status`, `/memory`, `/skills`, `/trace`, and `/diff` commands.
+- Slash command help is generated from the command registry so `/help` and the implemented command set stay in sync.
+- Skill metadata uses `schema_version: 1`. The lightweight parser remains intentionally narrow and rejects unsupported schema versions instead of accepting unknown formats silently.
+- Trace events include `schema_version: 1` in the stored model and JSON output. Existing event payloads stay compatible; the version field documents the current event contract for future migrations.
+- Eval run ids include microseconds and a short random suffix to avoid report/workspace collisions during fast consecutive or parallel checks.
+- `tests/test_day8_regression_matrix.py` is the V1.1 release smoke matrix for memory status flow, patch-file execution, explicit argv execution, write approval refusal, dangerous command blocking, and chat slash command availability.

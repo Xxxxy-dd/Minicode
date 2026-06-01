@@ -8,6 +8,7 @@ import time
 from csv import DictWriter
 from datetime import UTC, datetime
 from pathlib import Path
+from uuid import uuid4
 
 from minicode_agent.agent import AgentLoop
 from minicode_agent.harness.assertions import evaluate_assertions
@@ -28,7 +29,7 @@ class HarnessRunner:
         self.root = (root or Path.cwd()).expanduser().resolve()
         self.ablation_config = ablation_config or resolve_ablation_config(config)
         self.config = self.ablation_config.name
-        self.eval_id = datetime.now(UTC).strftime("eval_%Y%m%d_%H%M%S")
+        self.eval_id = make_eval_id()
 
     def load_tasks(self, taskset: Path) -> list[HarnessTask]:
         target = taskset.expanduser()
@@ -175,7 +176,7 @@ def run_success_command(command: SuccessCommand, workspace: Path) -> SuccessResu
 def run_all_configs(root: Path, taskset: Path) -> tuple[list[EvalResult], Path]:
     all_results: list[EvalResult] = []
     report_paths: list[Path] = []
-    eval_id = datetime.now(UTC).strftime("eval_%Y%m%d_%H%M%S")
+    eval_id = make_eval_id()
     for config_name in ablation_config_names():
         runner = HarnessRunner(root, config=config_name)
         runner.eval_id = eval_id
@@ -188,6 +189,11 @@ def run_all_configs(root: Path, taskset: Path) -> tuple[list[EvalResult], Path]:
     combined_path.write_text(render_comparison_report(all_results, report_paths), encoding="utf-8")
     write_machine_reports(report_dir, all_results)
     return all_results, combined_path
+
+
+def make_eval_id() -> str:
+    timestamp = datetime.now(UTC).strftime("eval_%Y%m%d_%H%M%S_%f")
+    return f"{timestamp}_{uuid4().hex[:6]}"
 
 
 def render_report(results: list[EvalResult], config: AblationConfig | None = None) -> str:

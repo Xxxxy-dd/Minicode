@@ -12,6 +12,7 @@ class SkillError(Exception):
 class SkillMetadata:
     name: str
     description: str
+    schema_version: int = 1
     tags: list[str] = field(default_factory=list)
     applies_to: list[str] = field(default_factory=list)
     examples: list[str] = field(default_factory=list)
@@ -126,9 +127,19 @@ def parse_skill_metadata(text: str, source: Path | None = None) -> SkillMetadata
         raise SkillError(f"Metadata field 'name' must be non-empty in {source_name}")
     if not payload["description"].strip():
         raise SkillError(f"Metadata field 'description' must be non-empty in {source_name}")
+    schema_version = payload.get("schema_version", 1)
+    if not isinstance(schema_version, int):
+        raise SkillError(f"Metadata field 'schema_version' must be an integer in {source_name}")
+    if schema_version != 1:
+        raise SkillError(f"Unsupported skill metadata schema_version {schema_version} in {source_name}")
+    for key in ("tags", "applies_to", "examples", "aliases"):
+        value = payload.get(key, [])
+        if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+            raise SkillError(f"Metadata field '{key}' must be a list of strings in {source_name}")
     return SkillMetadata(
         name=payload["name"],
         description=payload["description"],
+        schema_version=schema_version,
         tags=payload["tags"],
         applies_to=payload["applies_to"],
         examples=payload["examples"],
@@ -165,8 +176,10 @@ def parse_simple_yaml(text: str) -> dict[str, Any]:
     return result
 
 
-def parse_scalar(value: str) -> str:
+def parse_scalar(value: str) -> str | int:
     value = value.strip()
     if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
         return value[1:-1]
+    if value.isdigit():
+        return int(value)
     return value

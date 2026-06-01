@@ -9,7 +9,7 @@ from minicode_agent.agent import AgentLoop
 from minicode_agent.cli.app import app
 from minicode_agent.core.state import AgentPhase
 from minicode_agent.harness import HarnessRunner, ablation_config_names, load_ablation_config_file, resolve_ablation_config
-from minicode_agent.harness.runner import render_comparison_report
+from minicode_agent.harness.runner import make_eval_id, render_comparison_report
 from minicode_agent.harness.types import EvalResult
 from minicode_agent.runtime import RuntimeContext
 
@@ -36,6 +36,13 @@ def test_ablation_config_presets_define_expected_feature_flags() -> None:
     assert full_llm.uses_llm_memory
     assert full_llm.enable_skill_rerank
     assert "baseline" in ablation_config_names()
+
+
+def test_eval_ids_are_unique_for_fast_consecutive_runs() -> None:
+    ids = {make_eval_id() for _ in range(20)}
+
+    assert len(ids) == 20
+    assert all(value.startswith("eval_") for value in ids)
 
 
 def test_baseline_disables_skill_and_memory_events(tmp_path) -> None:

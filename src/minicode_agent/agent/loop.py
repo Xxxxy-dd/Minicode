@@ -7,7 +7,7 @@ from minicode_agent.context import TaskStateCompressor
 from minicode_agent.core.state import AgentPhase, AgentState, RunMetrics, TaskState
 from minicode_agent.agent.planner import ModelDecision, ModelDrivenPlanner, PlannedAction, RuleBasedPlanner, choose_entry_context_file
 from minicode_agent.intent import tool_intent_mismatch_reason
-from minicode_agent.memory import DeterministicReflectionEngine, LLMReflectionEngine, MemoryRecord, MemoryReflectionResult
+from minicode_agent.memory import DeterministicReflectionEngine, LLMReflectionEngine, MemoryKind, MemoryRecord, MemoryReflectionResult
 from minicode_agent.models import ModelClient
 from minicode_agent.runtime import RuntimeContext
 from minicode_agent.skills import SkillDefinition, SkillError, SkillRouter, default_skill_registry
@@ -20,6 +20,10 @@ MAX_OBSERVATION_CHARS = 4000
 SINGLE_OBSERVATION_COMPRESSION_CHARS = 3000
 RECENT_OBSERVATIONS_COMPRESSION_CHARS = 5000
 TOTAL_HISTORY_COMPRESSION_CHARS = 8000
+ACTIVE_USER_PREFERENCE_LIMIT = 5
+ACTIVE_SESSION_CONTEXT_LIMIT = 3
+
+
 @dataclass
 class AgentRunResult:
     state: AgentState
@@ -119,7 +123,7 @@ class AgentLoop:
 
         self._phase(AgentPhase.LOAD_CONTEXT, "Load workspace rules and trace context.")
         known_files = self._load_context()
-        recalled_memories = self.runtime.memory_store.recall(self.state.user_goal) if self.enable_memory else []
+        recalled_memories = self._recall_active_memories() if self.enable_memory else []
         self.active_memories = [item["record"] for item in recalled_memories]
         if self.enable_memory:
             self._observe(
@@ -369,6 +373,45 @@ class AgentLoop:
             self.failure_reason = observation.error
             return []
         return [line.rstrip("/") for line in observation.output.splitlines() if line]
+
+    def _recall_active_memories(self) -> list[dict[str, Any]]:
+        recalled = self.runtime.memory_store.recall(self.state.user_goal)
+        seen_ids = {item["record"].id for item in recalled}
+        for record in self.runtime.memory_store.search(
+            "",
+            limit=ACTIVE_USER_PREFERENCE_LIMIT,
+            kind=MemoryKind.USER,
+            tags=["preference"],
+            include_stale=False,
+        ):
+            if record.id in seen_ids:
+                continue
+            recalled.append(
+                {
+                    "record": record,
+                    "reason": "active user preference",
+                    "score": record.confidence,
+                }
+            )
+            seen_ids.add(record.id)
+        for record in self.runtime.memory_store.search(
+            "",
+            limit=ACTIVE_SESSION_CONTEXT_LIMIT,
+            kind=MemoryKind.USER,
+            tags=["session", "conversation"],
+            include_stale=False,
+        ):
+            if record.id in seen_ids:
+                continue
+            recalled.append(
+                {
+                    "record": record,
+                    "reason": "active chat session context",
+                    "score": record.confidence,
+                }
+            )
+            seen_ids.add(record.id)
+        return recalled
 
     def _act(self, tool: str, arguments: dict[str, Any]) -> dict[str, Any]:
         context = ToolContext(workspace=self.runtime.workspace)

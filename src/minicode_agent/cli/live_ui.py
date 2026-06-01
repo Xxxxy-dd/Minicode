@@ -11,9 +11,18 @@ from rich.table import Table
 from rich.text import Text
 
 from minicode_agent.agent import AgentLoop
+from minicode_agent.cli.chat_commands import handle_chat_command
 from minicode_agent.cli.preview_renderer import render_preview_text
 from minicode_agent.config import MiniCodeConfig, normalize_memory_reflection_mode
-from minicode_agent.intent import direct_chat_reply, is_direct_chat_query
+from minicode_agent.intent import (
+    contains_cjk,
+    direct_chat_reply,
+    ensure_response_language,
+    is_direct_chat_query,
+    model_direct_chat_reply,
+    response_language_from_preferences,
+)
+from minicode_agent.memory import MemoryKind, MemoryStore, default_memory_db_path
 from minicode_agent.models import OpenAICompatibleClient
 from minicode_agent.runtime import RuntimeContext
 from minicode_agent.tools.registry import create_default_registry
@@ -62,6 +71,8 @@ AVATAR_ROWS = [
     "......oo..oo......",
 ]
 
+RECENT_ACTIVITY_LINES = 5
+
 
 @dataclass
 class ChatTurn:
@@ -75,6 +86,23 @@ class ChatTurn:
     trace_backend: str = ""
     trace_path: Path | None = None
     memory_mode: str = "deterministic"
+    phase: str = ""
+    last_tool: str | None = None
+    last_tool_ok: bool | None = None
+    last_tool_result: str | None = None
+    diff_preview: dict | None = None
+
+
+@dataclass
+class ChatRunSnapshot:
+    phase: str = "init"
+    tool: str | None = None
+    tool_ok: bool | None = None
+    tool_result: str | None = None
+    diff_preview: dict | None = None
+    trace_run_id: str | None = None
+    trace_path: Path | None = None
+    trace_backend: str = ""
 
 
 @dataclass
@@ -88,6 +116,12 @@ class ChatSession:
     interactive_approval: bool = True
     notices: list[str] = field(default_factory=list)
     turns: list[ChatTurn] = field(default_factory=list)
+    snapshot: ChatRunSnapshot = field(default_factory=ChatRunSnapshot)
+    preferred_language: str | None = None
+    user_preferences: list[str] = field(default_factory=list)
+
+    def record_preview(self, preview: dict) -> None:
+        self.snapshot.diff_preview = preview
 
 
 def run_chat_session(
@@ -119,6 +153,8 @@ def run_chat_session(
         llm_rerank=llm_rerank,
         memory_reflection_mode=memory_reflection_mode,
         interactive_approval=not preview,
+        preferred_language=load_preferred_language(config.workspace),
+        user_preferences=load_user_preferences(config.workspace),
     )
     model_client = build_model_client(config)
     initial_task = task.strip() if task and task.strip() else None
@@ -145,10 +181,11 @@ def run_chat_session(
             if handle_chat_command(command, session):
                 Console().clear()
                 return
+            refresh_recent_activity(session)
             render_latest_notice(session)
             continue
         session.turns.append(run_turn(session, command, config, model_client, input_panel_height=input_panel_height))
-        refresh_chat_intro(session)
+        refresh_recent_activity(session)
         render_latest_turn(session)
 
 
@@ -169,12 +206,24 @@ def run_turn(
     model_client,
     input_panel_height: int = 0,
 ) -> ChatTurn:
+    remember_session_preferences(session, task)
     if is_direct_chat_query(task):
+        console = Console()
         if input_panel_height:
-            clear_previous_terminal_lines(Console(), input_panel_height)
-        return build_direct_chat_turn(session, task)
+            clear_previous_terminal_lines(console, input_panel_height)
+        if model_client is not None:
+            status = console.status("[bold #f5c48c]MiniCode is thinking...[/bold #f5c48c]", spinner="dots")
+            with status:
+                turn = build_direct_chat_turn(session, task, model_client=model_client)
+        else:
+            turn = build_direct_chat_turn(session, task, model_client=model_client)
+        return turn
     runtime = RuntimeContext.create(config.workspace, run_kind="chat")
+    seed_session_preferences(runtime.memory_store, session)
+    seed_recent_chat_context(runtime.memory_store, session)
     console = Console()
+    if input_panel_height:
+        clear_previous_terminal_lines(console, input_panel_height)
     status = console.status("[bold #f5c48c]MiniCode is thinking...[/bold #f5c48c]", spinner="dots")
     with status:
         result = AgentLoop(
@@ -186,14 +235,17 @@ def run_turn(
             aux_model_client=model_client,
             enable_skill_rerank=session.llm_rerank,
             memory_reflection_mode=session.memory_reflection_mode,
-            event_callback=None,
-            approval_callback=build_approval_callback(console, status) if session.interactive_approval else None,
+            event_callback=build_chat_event_callback(session, None),
+            approval_callback=build_approval_callback(console, status, on_preview=session.record_preview, clear_after=True) if session.interactive_approval else None,
         ).run()
-    if input_panel_height:
-        clear_previous_terminal_lines(console, input_panel_height)
-    summary = summarize_turn(result) or result.state.task_state.history_summary or "No summary available."
+    summary = localize_summary_language(
+        task,
+        summarize_turn(result) or result.state.task_state.history_summary or "No summary available.",
+        session=session,
+        model_client=model_client,
+    )
     failure_reason = result.state.task_state.failed_attempts[-1] if result.state.current_phase.value == "failed" and result.state.task_state.failed_attempts else None
-    return ChatTurn(
+    turn = ChatTurn(
         prompt=task,
         run_id=runtime.run_id,
         final_phase=result.state.current_phase.value,
@@ -204,12 +256,43 @@ def run_turn(
         trace_backend=runtime.trace_store.backend,
         trace_path=runtime.trace_store.storage_path,
         memory_mode=session.memory_reflection_mode,
+        phase=result.state.current_phase.value,
+        last_tool=session.snapshot.tool,
+        last_tool_ok=session.snapshot.tool_ok,
+        last_tool_result=session.snapshot.tool_result,
+        diff_preview=session.snapshot.diff_preview,
     )
+    session.snapshot.trace_run_id = runtime.run_id
+    session.snapshot.trace_path = runtime.trace_store.storage_path
+    session.snapshot.trace_backend = runtime.trace_store.backend
+    return turn
 
 
-def build_direct_chat_turn(session: ChatSession, task: str) -> ChatTurn:
+def build_direct_chat_turn(session: ChatSession, task: str, model_client=None) -> ChatTurn:
     prompt = task.strip()
-    summary = direct_chat_reply(prompt, create_default_registry())
+    recent_user_messages = [turn.prompt for turn in session.turns[-6:]]
+    if model_client is not None:
+        summary = model_direct_chat_reply(
+            prompt,
+            model_client,
+            workspace=session.workspace,
+            tool_registry=create_default_registry(),
+            model_name=display_model_name(session),
+            preferred_language=session.preferred_language,
+            recent_user_messages=recent_user_messages,
+            user_preferences=session.user_preferences,
+        )
+        trace_backend = "model"
+    else:
+        summary = direct_chat_reply(
+            prompt,
+            create_default_registry(),
+            model_name=display_model_name(session),
+            preferred_language=session.preferred_language,
+            recent_user_messages=recent_user_messages,
+            user_preferences=session.user_preferences,
+        )
+        trace_backend = "direct_fallback"
     return ChatTurn(
         prompt=prompt,
         run_id="chat_direct",
@@ -218,9 +301,10 @@ def build_direct_chat_turn(session: ChatSession, task: str) -> ChatTurn:
         selected_skills=[],
         summary=summary,
         failure_reason=None,
-        trace_backend="direct",
+        trace_backend=trace_backend,
         trace_path=None,
         memory_mode=session.memory_reflection_mode,
+        phase="done",
     )
 
 class ChatRunStream:
@@ -233,19 +317,47 @@ class ChatRunStream:
             self.console.print(line)
 
 
-def build_approval_callback(console: Console, status=None):
+def build_approval_callback(console: Console, status=None, on_preview=None, clear_after: bool = False):
     def approve(tool: str, arguments: dict, reason: str, preview: dict | None = None) -> bool:
         pause_status(status)
+        printed_lines = 0
         try:
             if preview:
-                console.print(Text(render_preview_text(preview, heading=f"Pending write: {tool}"), style="#cfc7b9"))
+                if on_preview is not None:
+                    on_preview(preview)
+                preview_text = (
+                    render_compact_approval_preview(tool, preview)
+                    if clear_after
+                    else render_preview_text(preview, heading=f"Pending write: {tool}")
+                )
+                printed_lines += len(preview_text.splitlines()) + 1
+                console.print(Text(preview_text, style="#cfc7b9"))
             prompt = "是否批准？[y/N] "
             answer = console.input(Text(prompt, style="bold #9ad8ff")).strip().lower()
-            return answer in {"y", "yes"}
+            printed_lines += 1
+            approved = answer in {"y", "yes"}
+            if not approved:
+                console.print(Text("未应用变更。", style="bold #ffb3b3"))
+                printed_lines += 1
+            return approved
         finally:
+            if clear_after and printed_lines:
+                clear_previous_terminal_lines(console, printed_lines)
             resume_status(status)
 
     return approve
+
+
+def render_compact_approval_preview(tool: str, preview: dict) -> str:
+    summary = str(preview.get("summary") or f"Pending write: {tool}").strip()
+    operation = str(preview.get("operation") or "").strip()
+    paths = ", ".join(str(path) for path in preview.get("paths", []) if str(path).strip())
+    stats = preview.get("stats") if isinstance(preview.get("stats"), dict) else {}
+    stats_text = ""
+    if stats:
+        stats_text = f" +{stats.get('insertions', 0)} -{stats.get('deletions', 0)} hunks={stats.get('hunks', 0)}"
+    detail = " | ".join(part for part in (operation, paths, stats_text.strip()) if part)
+    return f"Pending write: {tool}\n{summary}" + (f"\n{detail}" if detail else "") + "\nFull preview is available with /diff after this turn."
 
 
 def pause_status(status) -> None:
@@ -260,13 +372,7 @@ def resume_status(status) -> None:
 
 def format_stream_event(event_type: str, payload: dict) -> Text | None:
     if event_type == "phase_changed":
-        phase = payload.get("phase", "")
-        reason = payload.get("reason", "")
-        text = Text("phase ", style="#77706a")
-        text.append(str(phase), style="bold #9ad8ff")
-        if reason:
-            text.append(f"  {reason}", style="#cfc7b9")
-        return text
+        return None
     if event_type == "agent_planned":
         text = Text("plan  ", style="#77706a")
         text.append(str(payload.get("description") or ""), style="#efe8dd")
@@ -295,22 +401,6 @@ def format_stream_event(event_type: str, payload: dict) -> Text | None:
     return None
 
 
-def handle_chat_command(command: str, session: ChatSession) -> bool:
-    lowered = command.strip().lower()
-    if lowered in {"/exit", "/quit"}:
-        return True
-    if lowered == "/clear":
-        session.turns.clear()
-        session.notices = ["Session cleared."]
-        return False
-    if lowered == "/status":
-        return False
-    if lowered == "/help":
-        session.notices = ["Shortcuts: /help shows this guide, /clear clears the session, /exit leaves MiniCode."]
-        return False
-    return False
-
-
 def render_chat_screen(session: ChatSession) -> None:
     from rich.console import Console
 
@@ -324,6 +414,15 @@ def render_chat_screen(session: ChatSession) -> None:
     console.print(conversation)
     console.print()
     console.print(bottom)
+
+
+def render_chat_frame(session: ChatSession, console: Console | None = None) -> None:
+    console = console or Console()
+    console.clear()
+    console.print(render_top_panel(session))
+    console.print()
+    console.print(render_conversation_area(session))
+    console.print()
 
 
 def render_chat_intro(session: ChatSession, console: Console | None = None) -> None:
@@ -343,6 +442,23 @@ def refresh_chat_intro(session: ChatSession, console: Console | None = None) -> 
     clear_forward_terminal_lines(console, top_height)
     console.print(top_panel)
     console.print()
+    console.file.write("\x1b[u")
+    console.file.flush()
+
+
+def refresh_recent_activity(session: ChatSession, console: Console | None = None) -> None:
+    console = console or Console()
+    if not console.is_terminal:
+        return
+    row, column = recent_activity_position(session, console)
+    width = max(24, console.width - column - 2)
+    lines = recent_activity_lines(session)
+    console.file.write("\x1b[s")
+    for index in range(RECENT_ACTIVITY_LINES):
+        line = lines[index] if index < len(lines) else Text()
+        line = clipped_activity_line(line, width)
+        console.file.write(f"\x1b[{row + index};{column}H")
+        console.print(line, end="")
     console.file.write("\x1b[u")
     console.file.flush()
 
@@ -377,29 +493,71 @@ def render_top_panel(session: ChatSession) -> Panel:
 def render_left_column(session: ChatSession) -> RenderableType:
     title = Text("MiniCode", style="bold #f5c48c")
     subtitle = Text("local coding agent runtime", style="#cfc7b9")
-    return Group(Align.center(title), Align.center(subtitle), Text(), render_avatar())
+    model = Text(display_model_name(session), style="#9ad8ff")
+    return Group(Align.center(title), Align.center(subtitle), Align.center(model), Text(), render_avatar())
 
 
 def render_right_column(session: ChatSession, include_commands: bool = True) -> RenderableType:
     recent = Text()
-    recent.append("Recent Activity\n", style="bold #f5c48c")
-    if not session.turns:
-        recent.append("No recent activity\n", style="#cfc7b9")
-    for turn in session.turns[-4:]:
-        status = "ok" if turn.final_phase == "done" else turn.final_phase
-        recent.append(f"- {status}  ", style="#9ad8ff")
-        recent.append(turn.prompt[:52], style="#efe8dd")
-        if len(turn.prompt) > 52:
-            recent.append("...", style="#efe8dd")
-        recent.append(f"  ({turn.tool_calls} tools)\n", style="#b8aa73")
+    for line in recent_activity_lines(session):
+        recent.append_text(line)
+        recent.append("\n")
     if not include_commands:
         return recent
     tips = Text()
     tips.append("\nCommands\n", style="bold #f5c48c")
     tips.append("/help    show shortcuts\n", style="#9ad8ff")
+    tips.append("/status  show latest run\n", style="#9ad8ff")
+    tips.append("/memory  show recent memory\n", style="#9ad8ff")
+    tips.append("/skills  show route summary\n", style="#9ad8ff")
+    tips.append("/trace   show recent trace\n", style="#9ad8ff")
+    tips.append("/diff    show latest diff\n", style="#9ad8ff")
+    tips.append("/tools   show tool registry\n", style="#9ad8ff")
+    tips.append("/config  show session config\n", style="#9ad8ff")
+    tips.append("/last    show latest turn summary\n", style="#9ad8ff")
     tips.append("/clear   clear this session\n", style="#9ad8ff")
     tips.append("/exit    leave MiniCode\n", style="#9ad8ff")
     return Group(recent, tips)
+
+
+def recent_activity_lines(session: ChatSession) -> list[Text]:
+    lines = [Text("Recent Activity", style="bold #f5c48c")]
+    if not session.turns:
+        lines.append(Text("No recent activity", style="#cfc7b9"))
+        return lines
+    for turn in session.turns[-4:]:
+        status = "ok" if turn.final_phase == "done" else turn.final_phase
+        line = Text()
+        line.append(f"- {status}  ", style="#9ad8ff")
+        line.append(turn.prompt[:52], style="#efe8dd")
+        if len(turn.prompt) > 52:
+            line.append("...", style="#efe8dd")
+        line.append(f"  ({turn.tool_calls} tools)", style="#b8aa73")
+        lines.append(line)
+    return lines
+
+
+def clipped_activity_line(line: Text, width: int) -> Text:
+    clipped = line.copy()
+    clipped.truncate(width, overflow="ellipsis")
+    padding = max(0, width - len(clipped.plain))
+    if padding:
+        clipped.append(" " * padding)
+    return clipped
+
+
+def recent_activity_column(session: ChatSession, console: Console) -> int:
+    return recent_activity_position(session, console)[1]
+
+
+def recent_activity_position(session: ChatSession, console: Console) -> tuple[int, int]:
+    probe_lines = console.render_lines(render_top_panel(session), console.options)
+    for row, line in enumerate(probe_lines, start=1):
+        text = "".join(segment.text for segment in line)
+        index = text.find("Recent Activity")
+        if index >= 0:
+            return row, index + 1
+    return 4, max(38, int(console.width * 0.53))
 
 
 def render_conversation_area(session: ChatSession) -> RenderableType:
@@ -473,7 +631,8 @@ def render_bottom_panel(session: ChatSession | None = None) -> Panel:
     prompt_hint.append("/clear", style="bold #9ad8ff")
     prompt_hint.append(" / ", style="#cfc7b9")
     prompt_hint.append("/exit", style="bold #9ad8ff")
-    prompt_hint.append(" to leave.", style="#cfc7b9")
+    prompt_hint.append(" to leave. ", style="#cfc7b9")
+    prompt_hint.append("Use /help for status, memory, skills, trace, diff, tools, config, last.", style="#77706a")
     return Panel(
         prompt_hint,
         box=ROUNDED,
@@ -489,8 +648,7 @@ def input_bar() -> tuple[str, int]:
     panel_height = len(console.render_lines(bottom_panel, console.options))
     console.print(bottom_panel)
     value = console.input("> ").strip()
-    clear_previous_terminal_lines(console, 1)
-    return value, panel_height
+    return value, panel_height + 1
 
 
 def clear_previous_terminal_lines(console: Console, count: int) -> None:
@@ -522,6 +680,94 @@ def render_avatar() -> Group:
     return Group(*lines)
 
 
+def display_model_name(session: ChatSession) -> str:
+    return session.model_name or "no-model"
+
+
+def load_user_preferences(workspace: Path) -> list[str]:
+    store = MemoryStore(default_memory_db_path(workspace))
+    records = store.search("user preference language", limit=5, kind=MemoryKind.USER, tags=["preference"])
+    return [record.content for record in records]
+
+
+def load_preferred_language(workspace: Path) -> str | None:
+    preferences = load_user_preferences(workspace)
+    for preference in preferences:
+        if "中文" in preference or "Chinese" in preference:
+            return "zh"
+        if "English" in preference or "英文" in preference:
+            return "en"
+    return None
+
+
+def remember_session_preferences(session: ChatSession, task: str) -> None:
+    language = language_preference_from_text(task)
+    if language:
+        session.preferred_language = language
+        content = "User prefers Chinese replies." if language == "zh" else "User prefers English replies."
+        if content not in session.user_preferences:
+            session.user_preferences.insert(0, content)
+        persist_user_preference(session.workspace, content, tags=["preference", "language"])
+
+
+def language_preference_from_text(text: str) -> str | None:
+    normalized = text.strip().lower()
+    if any(phrase in text for phrase in ("说中文", "用中文", "中文回答", "请用中文", "一直说中文")):
+        return "zh"
+    if any(phrase in normalized for phrase in ("speak english", "reply in english", "use english")) or "英文回答" in text:
+        return "en"
+    return None
+
+
+def persist_user_preference(workspace: Path, content: str, tags: list[str]) -> None:
+    store = MemoryStore(default_memory_db_path(workspace))
+    store.add(
+        MemoryKind.USER,
+        content,
+        confidence=0.9,
+        source_run_id="chat_session",
+        tags=tags,
+        reason="explicit chat preference",
+        metadata={"source": "chat_direct"},
+        admission_reason="explicit user preference",
+    )
+
+
+def seed_session_preferences(store: MemoryStore, session: ChatSession) -> None:
+    for preference in session.user_preferences[:5]:
+        store.add(
+            MemoryKind.USER,
+            preference,
+            confidence=0.9,
+            source_run_id="chat_session",
+            tags=["preference", "session"],
+            reason="active chat session preference",
+            metadata={"source": "chat_session"},
+            admission_reason="active session preference",
+        )
+
+
+def seed_recent_chat_context(store: MemoryStore, session: ChatSession) -> None:
+    recent_turns = session.turns[-4:]
+    if not recent_turns:
+        return
+    lines = []
+    for turn in recent_turns:
+        lines.append(f"User: {turn.prompt}")
+        if turn.summary:
+            lines.append(f"MiniCode: {turn.summary}")
+    store.add(
+        MemoryKind.USER,
+        "Recent chat context:\n" + "\n".join(lines),
+        confidence=0.85,
+        source_run_id="chat_session",
+        tags=["session", "conversation"],
+        reason="active chat session context",
+        metadata={"source": "chat_session", "ephemeral": True},
+        admission_reason="active session context",
+    )
+
+
 def summarize_turn(result) -> str:
     for decision in result.state.task_state.decisions:
         if decision != "Keep the first loop minimal and traceable.":
@@ -538,6 +784,40 @@ def summarize_turn(result) -> str:
                 return str(value)[:160]
     return result.state.task_state.decisions[-1] if result.state.task_state.decisions else "No summary available."
 
+
+def localize_summary_language(task: str, summary: str, session: ChatSession | None = None, model_client=None) -> str:
+    response_language = (
+        response_language_from_preferences(session.user_preferences, session.preferred_language, task)
+        if session is not None
+        else ("Chinese" if contains_cjk(task) else "English")
+    )
+    if response_language == "Chinese" and summary.strip() and not contains_cjk(summary):
+        rewritten = ensure_response_language(summary, response_language, model_client, user_message=task)
+        if contains_cjk(rewritten):
+            return rewritten
+        return "模型返回的最终说明语言与当前请求不一致；变更已完成，请用 /trace 或 /diff 查看本轮细节。"
+    return summary
+
+
+def build_chat_event_callback(session: ChatSession, stream: ChatRunStream | None):
+    def callback(event_type: str, payload: dict) -> None:
+        if event_type == "phase_changed":
+            session.snapshot.phase = str(payload.get("phase") or session.snapshot.phase)
+        elif event_type == "action_result":
+            session.snapshot.tool = str(payload.get("tool") or "") or None
+            session.snapshot.tool_ok = bool(payload.get("ok"))
+            session.snapshot.tool_result = str(payload.get("result") or payload.get("error") or "") or None
+            preview = payload.get("metadata", {}).get("preview") if isinstance(payload.get("metadata"), dict) else None
+            if isinstance(preview, dict):
+                session.record_preview(preview)
+        elif event_type == "write_preview":
+            preview = payload.get("preview")
+            if isinstance(preview, dict):
+                session.record_preview(preview)
+        if stream is not None:
+            stream.handle(event_type, payload)
+
+    return callback
 
 def horizontal_rule(width: int) -> Text:
     rule_width = max(20, width - 1)

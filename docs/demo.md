@@ -17,6 +17,22 @@ E:\conda\envs\minicode\Scripts\minicode.exe run "inspect project" --workspace . 
 
 This demonstrates the deterministic rule planner, tool runtime, trace store, and safe read-only flow.
 
+## Chat Observability
+
+```powershell
+E:\conda\envs\minicode\Scripts\minicode.exe chat "inspect project" --workspace . --no-model --preview
+E:\conda\envs\minicode\Scripts\minicode.exe chat "/status" --workspace . --no-model --preview
+E:\conda\envs\minicode\Scripts\minicode.exe chat "/memory" --workspace . --no-model --preview
+E:\conda\envs\minicode\Scripts\minicode.exe chat "/skills" --workspace . --no-model --preview
+E:\conda\envs\minicode\Scripts\minicode.exe chat "/trace" --workspace . --no-model --preview
+E:\conda\envs\minicode\Scripts\minicode.exe chat "/diff" --workspace . --no-model --preview
+E:\conda\envs\minicode\Scripts\minicode.exe chat "/tools" --workspace . --no-model --preview
+E:\conda\envs\minicode\Scripts\minicode.exe chat "/config" --workspace . --no-model --preview
+E:\conda\envs\minicode\Scripts\minicode.exe chat "/last" --workspace . --no-model --preview
+```
+
+These commands show the lightweight chat status, memory, skill route, trace, diff, tool registry, session config, and latest-turn summaries added in V1.1.
+
 ## Route Skills
 
 ```powershell
@@ -40,6 +56,8 @@ This shows the declared tool runtime and the structured repository summary used 
 ```powershell
 E:\conda\envs\minicode\Scripts\minicode.exe tools run write_file --workspace . --path scratch.txt --content "hello"
 E:\conda\envs\minicode\Scripts\minicode.exe tools run write_file --workspace . --path scratch.txt --content "hello" --approved
+E:\conda\envs\minicode\Scripts\minicode.exe tools run apply_patch --workspace . --patch-file change.diff --approved
+E:\conda\envs\minicode\Scripts\minicode.exe tools run run_shell --workspace . --arg python --arg -c --arg "print('hello')" --approved
 E:\conda\envs\minicode\Scripts\minicode.exe trace --workspace .
 ```
 
@@ -63,6 +81,21 @@ E:\conda\envs\minicode\Scripts\minicode.exe eval examples\tasks\11_memory_reuse_
 ```
 
 The report is written under `.minicode/evals/` with Markdown, `results.json`, and `summary.csv`.
+
+## V1.1 Release Checklist
+
+```powershell
+E:\conda\envs\minicode\python.exe -m pytest -q
+E:\conda\envs\minicode\python.exe -m pytest tests\test_day8_regression_matrix.py -q
+E:\conda\envs\minicode\Scripts\minicode.exe chat --workspace . --no-model --preview
+E:\conda\envs\minicode\Scripts\minicode.exe chat "/tools" --workspace . --no-model --preview
+E:\conda\envs\minicode\Scripts\minicode.exe eval examples\tasks --workspace . --config baseline
+E:\conda\envs\minicode\Scripts\minicode.exe eval examples\tasks --workspace . --config all
+```
+
+V1.1 remains intentionally local and bounded: no automatic worktree creation, no fork orchestration, no automatic merge, and no independent write permission for team roles.
+
+Delivery note: eval report ids include microseconds plus a short random suffix, so baseline/all checks can be run quickly without colliding on the same temporary workspace path.
 
 ## LLM-Enhanced Run
 

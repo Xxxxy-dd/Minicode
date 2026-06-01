@@ -81,6 +81,7 @@ def test_workspace_skill_overrides_external_and_builtin(tmp_path, monkeypatch) -
 def test_parse_skill_metadata_accepts_lists() -> None:
     metadata = parse_skill_metadata(
         """
+        schema_version: 1
         name: sample
         description: Sample skill.
         tags:
@@ -97,8 +98,52 @@ def test_parse_skill_metadata_accepts_lists() -> None:
     )
 
     assert metadata.name == "sample"
+    assert metadata.schema_version == 1
     assert metadata.tags == ["one", "two"]
     assert metadata.aliases == ["sample alias"]
+
+
+def test_parse_skill_metadata_rejects_unsupported_schema_version() -> None:
+    try:
+        parse_skill_metadata(
+            """
+            schema_version: 2
+            name: sample
+            description: Sample skill.
+            tags:
+              - one
+            applies_to:
+              - demo
+            examples:
+              - example task
+            """,
+            Path("metadata.yaml"),
+        )
+    except SkillError as exc:
+        assert "Unsupported skill metadata schema_version 2" in str(exc)
+    else:
+        raise AssertionError("Expected SkillError")
+
+
+def test_parse_skill_metadata_rejects_non_string_list_items() -> None:
+    try:
+        parse_skill_metadata(
+            """
+            name: sample
+            description: Sample skill.
+            tags:
+              - 123
+            applies_to:
+              - demo
+            examples:
+              - example task
+            """,
+            Path("metadata.yaml"),
+        )
+    except SkillError as exc:
+        assert "Metadata field 'tags' must be a list of strings" in str(exc)
+    else:
+        raise AssertionError("Expected SkillError")
 
 
 def test_cli_skills_list_and_show() -> None:

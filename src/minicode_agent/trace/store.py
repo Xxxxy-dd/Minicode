@@ -9,7 +9,11 @@ from pydantic import BaseModel, Field
 from minicode_agent.security.redaction import safe_payload as safe_trace_payload
 
 
+TRACE_SCHEMA_VERSION = 1
+
+
 class TraceEvent(BaseModel):
+    schema_version: int = TRACE_SCHEMA_VERSION
     id: str = Field(default_factory=lambda: uuid4().hex)
     run_id: str
     event_type: str

@@ -7,6 +7,7 @@ from rich.table import Table
 
 from minicode_agent.agent import AgentLoop
 from minicode_agent.cli.preview_renderer import render_preview_text
+from minicode_agent.cli.renderers import render_memory_record
 from minicode_agent.config import MiniCodeConfig, normalize_memory_reflection_mode
 from minicode_agent.harness import HarnessRunner, ablation_config_names, load_ablation_config_file, resolve_ablation_config, run_all_configs
 from minicode_agent.memory import MemoryKind, MemoryStatus, MemoryStore, default_memory_db_path
@@ -566,20 +567,7 @@ def summarize_metadata(metadata: dict) -> str:
 
 
 def format_memory_record(record) -> str:
-    lines = [
-        (
-            f"- id={record.id} kind={record.kind.value} status={record.status.value} "
-            f"confidence={record.confidence:.2f} source={record.source_run_id or '(none)'}"
-        ),
-        f"  tags={', '.join(record.tags) or '(none)'}",
-        f"  reason={record.reason or '(none)'}",
-        f"  admission={record.admission_reason or '(none)'}",
-    ]
-    metadata = summarize_metadata(record.metadata)
-    if metadata:
-        lines.append(f"  metadata={metadata}")
-    lines.append(f"  content={record.content}")
-    return "\n".join(lines)
+    return render_memory_record(record)
 
 
 def read_patch_file(path: Path) -> str:

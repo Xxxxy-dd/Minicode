@@ -3,6 +3,7 @@ import pytest
 from minicode_agent.agent import AgentLoop
 from minicode_agent.core.state import AgentPhase
 from minicode_agent.models import ModelMessage, ModelResponse, build_planning_prompt, parse_model_plan
+from minicode_agent.memory import MemoryKind, MemoryStore
 from minicode_agent.runtime import RuntimeContext
 from minicode_agent.skills import SkillRegistry
 from minicode_agent.tools.registry import create_default_registry
@@ -266,23 +267,57 @@ def test_build_planning_prompt_includes_tools_and_limits_files() -> None:
     assert "tools, skills, memory, trace, subagents, and evaluation harness" in messages[0].content
     assert "First classify the user's request as direct_answer or coding_task" in messages[0].content
     assert "tailor the answer to the exact intent" in messages[0].content
+    assert "capability_profile facts" in messages[0].content
     assert "Return only JSON" in messages[0].content
     assert "capability/help questions" in messages[0].content
     assert "permission is ask" in messages[0].content
     assert '"recent_observations"' in messages[1].content
+    assert '"user_language": "English"' in messages[1].content
+    assert '"response_language": "English"' in messages[1].content
     assert '"active_skills"' in messages[1].content
+    assert '"capability_profile"' in messages[1].content
     assert "Debugging" in messages[1].content
     assert '"aliases"' in messages[1].content
     assert "失败" in messages[1].content
     assert '"available_tools"' in messages[1].content
     assert '"direct_answer_policy"' in messages[1].content
     assert '"language_preference"' in messages[1].content
+    assert '"tools"' in messages[1].content
+    assert '"skills"' in messages[1].content
+    assert '"commands"' in messages[1].content
+    assert "code-review" in messages[1].content
+    assert "/skills" in messages[1].content
     assert '"usage_help"' in messages[1].content
     assert '"conceptual"' in messages[1].content
     assert '"risk_level"' in messages[1].content
     assert '"permission"' in messages[1].content
     assert "file_49.py" in messages[1].content
     assert "file_50.py" not in messages[1].content
+
+
+def test_build_planning_prompt_declares_chinese_user_language() -> None:
+    messages = build_planning_prompt("写一个快速排序到 test.py", ["test.py"], create_default_registry())
+
+    assert '"user_language": "Chinese"' in messages[1].content
+    assert "final_answer must also use response_language" in messages[0].content
+    assert '"response_language": "Chinese"' in messages[1].content
+    assert "Reply in Chinese" in messages[1].content
+
+
+def test_build_planning_prompt_uses_memory_language_preference(tmp_path) -> None:
+    store = MemoryStore(tmp_path / "memory.db")
+    memory = store.add(
+        MemoryKind.USER,
+        "User prefers Chinese replies.",
+        confidence=0.9,
+        tags=["preference", "language"],
+    )[0]
+
+    messages = build_planning_prompt("1+1 = ?", ["README.md"], create_default_registry(), memories=[memory])
+
+    assert '"user_language": "English"' in messages[1].content
+    assert '"response_language": "Chinese"' in messages[1].content
+    assert "Reply in Chinese" in messages[1].content
 
 
 def test_agent_loop_uses_mock_model_planner(tmp_path) -> None:

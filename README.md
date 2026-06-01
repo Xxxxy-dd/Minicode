@@ -69,12 +69,17 @@ minicode chat --workspace .
 常用交互命令：
 
 ```text
-/help   查看可用快捷命令
-/clear  清空当前会话显示
-/exit   退出 MiniCode
+/help    查看可用快捷命令
+/status  查看最近一次运行的 phase、tool、skill 和 trace id
+/memory  查看最近项目记忆摘要
+/skills  查看最近任务的 skill 路由摘要
+/trace   查看最近 run 的 trace 摘要
+/diff    查看最近一次写入 preview/diff
+/clear   清空当前会话显示
+/exit    退出 MiniCode
 ```
 
-写文件、删除文件、运行命令等动作会触发确认。交互模式里只需要按提示输入 `y` 或 `n`。
+写文件、删除文件、运行命令等动作会触发确认。交互模式会先展示 diff/stat preview，再按 `y/N` 等待确认；拒绝时会显示“未应用变更”，文件保持不变。
 
 ## 核心能力
 
@@ -180,6 +185,10 @@ minicode trace <run_id> --json
 
 Trace 可用于调试“为什么 Agent 这样回答”“为什么工具没有执行”“是否重复调用了同一个工具”等问题。
 
+### V1.1 CLI Observability
+
+V1.1 的 chat 交互会在每次 run 后显示最近 phase、tool call、selected skill 和 trace id。`/status`、`/memory`、`/skills`、`/trace`、`/diff` 复用同一套短摘要 renderer，避免 chat、CLI 和 trace 展示分叉。
+
 ### Subagents
 
 MiniCode V1 内置只读子 Agent：
@@ -227,6 +236,21 @@ V1.1 的评测任务支持 trace assertions、forbidden tool assertions、file d
 ### Agent Team
 
 `spawn_subagent` 现在会通过轻量 `AgentTeam` 协议运行 bounded role worker。V1.1 只启用 explorer/reviewer 的只读能力；implementer role 仅保留协议接口，不获得独立写权限。Team trace 会记录 `team_started`、`team_role_completed` 和 `team_finished`，并附带 workspace isolation plan。该 plan 只探测 git/worktree 可用性、branch 和 dirty state，不会自动创建 worktree、fork 或 merge。
+
+## V1.1 发布检查
+
+- `python -m pytest -q`
+- `minicode chat --workspace . --no-model --preview`
+- `minicode chat "/status" --workspace . --no-model --preview`
+- `minicode tools run write_file --workspace . --path scratch.txt --content "hello"`
+- `minicode eval examples/tasks --config baseline`
+- `minicode eval examples/tasks --config all`
+
+已知限制：
+
+- V1.1 不自动创建 worktree、fork 或 merge。
+- chat 仍是轻量 CLI，不是复杂 TUI。
+- `/diff` 展示最近一次 write preview；历史完整 diff 仍通过 trace 查看。
 
 ## 验证
 

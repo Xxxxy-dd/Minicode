@@ -1,8 +1,12 @@
+import json
 import re
 from dataclasses import dataclass
+from pathlib import Path
 
+from minicode_agent.capabilities import build_capability_profile, capability_reply
+from minicode_agent.models import ModelClient, ModelMessage
 from minicode_agent.tools.registry import ToolRegistry
-from minicode_agent.tools.types import PermissionMode, ToolIntent
+from minicode_agent.tools.types import ToolIntent
 
 
 @dataclass(frozen=True)
@@ -100,10 +104,18 @@ DIRECT_CHAT_PATTERNS = (
     "你能帮我什么",
     "你好",
     "您好",
+    "工具",
+    "skills",
+    "skill",
+    "命令",
     "说中文",
     "用中文",
     "你有啥工具",
     "有什么工具",
+    "what skills",
+    "which skills",
+    "your skills",
+    "slash commands",
     "tool list",
     "what tools do you have",
     "what are your tools",
@@ -137,28 +149,181 @@ def is_direct_chat_query(task: str) -> bool:
     return any(pattern in normalized for pattern in DIRECT_CHAT_PATTERNS)
 
 
-def direct_chat_reply(task: str, tool_registry: ToolRegistry | None = None) -> str:
-    normalized = task.strip()
-    lowered = normalized.lower()
-    if any(phrase in normalized for phrase in ("你是谁", "你是什么", "who are you")):
-        return "我是 MiniCode，一个本地编码代理，可以帮你看代码、改代码、跑测试、查问题和整理项目。"
-    if any(phrase in normalized for phrase in ("你有什么工具", "你能做什么", "what can you do", "help")):
-        return _capability_reply(tool_registry)
-    if "tool" in lowered or "工具" in normalized:
-        return _capability_reply(tool_registry)
-    return "我是 MiniCode，可以帮你处理代码、测试、审查和项目整理。"
+def direct_chat_reply(
+    task: str,
+    tool_registry: ToolRegistry | None = None,
+    model_name: str | None = None,
+    preferred_language: str | None = None,
+    recent_user_messages: list[str] | None = None,
+    user_preferences: list[str] | None = None,
+) -> str:
+    return fallback_direct_chat_reply(
+        task,
+        tool_registry,
+        model_name=model_name,
+        preferred_language=preferred_language,
+        recent_user_messages=recent_user_messages,
+        user_preferences=user_preferences,
+    )
 
 
-def _capability_reply(tool_registry: ToolRegistry | None) -> str:
-    if tool_registry is None:
-        return "我可以读写文件、搜索代码、运行命令、跑测试、查看 git 状态和差异，也可以按需调用子代理。"
+def model_direct_chat_reply(
+    task: str,
+    model_client: ModelClient,
+    *,
+    workspace: Path | None = None,
+    tool_registry: ToolRegistry | None = None,
+    model_name: str | None = None,
+    preferred_language: str | None = None,
+    recent_user_messages: list[str] | None = None,
+    user_preferences: list[str] | None = None,
+) -> str:
+    response_language = response_language_from_preferences(user_preferences or [], preferred_language, task)
+    response = model_client.complete(
+        build_direct_chat_messages(
+            task,
+            workspace=workspace,
+            tool_registry=tool_registry,
+            model_name=model_name,
+            preferred_language=preferred_language,
+            recent_user_messages=recent_user_messages,
+            user_preferences=user_preferences,
+        )
+    )
+    return ensure_response_language(
+        response.content.strip(),
+        response_language,
+        model_client,
+        user_message=task,
+    )
 
-    tools = tool_registry.list()
-    safe_tools = [tool.spec.name for tool in tools if tool.spec.permission == PermissionMode.ALLOW]
-    approval_tools = [tool.spec.name for tool in tools if tool.spec.permission == PermissionMode.ASK]
-    parts = [
-        "我可以基于当前工具注册表工作：",
-        f"无需审批的工具包括 {', '.join(safe_tools) or '无'}；",
-        f"需要审批的工具包括 {', '.join(approval_tools) or '无'}。",
+
+def build_direct_chat_messages(
+    task: str,
+    *,
+    workspace: Path | None = None,
+    tool_registry: ToolRegistry | None = None,
+    model_name: str | None = None,
+    preferred_language: str | None = None,
+    recent_user_messages: list[str] | None = None,
+    user_preferences: list[str] | None = None,
+) -> list[ModelMessage]:
+    response_language = response_language_from_preferences(user_preferences or [], preferred_language, task)
+    system = (
+        "You are MiniCode's conversational agent shell. "
+        "Answer the user naturally in response_language unless the user explicitly requests another language in the current message. "
+        "You must ground identity, model, tools, skills, commands, and capability answers in the provided runtime_context. "
+        "Do not claim abilities that are not present in capability_profile. "
+        "Do not emit JSON."
+    )
+    payload = {
+        "user_message": task,
+        "runtime_context": {
+            "model_name": model_name or "no-model",
+            "preferred_language": preferred_language,
+            "response_language": response_language,
+            "recent_user_messages": recent_user_messages or [],
+            "user_preferences": user_preferences or [],
+            "capability_profile": build_capability_profile(workspace=workspace, tool_registry=tool_registry),
+        },
+    }
+    return [
+        ModelMessage(role="system", content=system),
+        ModelMessage(role="user", content=json.dumps(payload, ensure_ascii=False, indent=2)),
     ]
-    return "".join(parts)
+
+
+def fallback_direct_chat_reply(
+    task: str,
+    tool_registry: ToolRegistry | None = None,
+    *,
+    model_name: str | None = None,
+    preferred_language: str | None = None,
+    recent_user_messages: list[str] | None = None,
+    user_preferences: list[str] | None = None,
+) -> str:
+    normalized = task.strip()
+    reply_in_zh = preferred_language != "en" and (preferred_language == "zh" or contains_cjk(normalized))
+    profile = build_capability_profile(tool_registry=tool_registry)
+    subject = capability_subject(normalized)
+    if subject:
+        return capability_reply(profile, subject=subject, chinese=reply_in_zh)
+    return capability_reply(profile, subject="overview", chinese=reply_in_zh)
+
+
+def capability_subject(text: str) -> str | None:
+    lowered = text.lower()
+    if any(token in lowered for token in ("skills", "skill")) or "技能" in text:
+        return "skills"
+    if "命令" in text or "command" in lowered:
+        return "commands"
+    if any(token in lowered for token in ("tool", "capabilit", "help")) or any(token in text for token in ("工具", "能做什么", "会什么", "能帮我什么")):
+        return "tools"
+    return None
+
+
+def contains_cjk(value: str) -> bool:
+    return any("\u4e00" <= char <= "\u9fff" for char in value)
+
+
+def response_language_from_preferences(preferences: list[str], preferred_language: str | None, task: str) -> str:
+    if preferred_language == "zh":
+        return "Chinese"
+    if preferred_language == "en":
+        return "English"
+    for preference in preferences:
+        lowered = preference.casefold()
+        if "chinese" in lowered or "中文" in preference:
+            return "Chinese"
+        if "english" in lowered or "英文" in preference:
+            return "English"
+    return "Chinese" if contains_cjk(task) else "English"
+
+
+def response_matches_language(text: str, response_language: str) -> bool:
+    if not text.strip():
+        return True
+    if response_language == "Chinese":
+        return contains_cjk(text)
+    return True
+
+
+def ensure_response_language(
+    text: str,
+    response_language: str,
+    model_client: ModelClient | None = None,
+    *,
+    user_message: str = "",
+) -> str:
+    if response_matches_language(text, response_language):
+        return text
+    if model_client is None:
+        return text
+    rewrite_messages = [
+        ModelMessage(
+            role="system",
+            content=(
+                "Rewrite the assistant response into the requested response_language. "
+                "Preserve the exact meaning and any technical identifiers. "
+                "Do not add new claims, explanations, markdown fences, or metadata."
+            ),
+        ),
+        ModelMessage(
+            role="user",
+            content=json.dumps(
+                {
+                    "response_language": response_language,
+                    "user_message": user_message,
+                    "assistant_response": text,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+        ),
+    ]
+    rewritten = model_client.complete(rewrite_messages).content.strip()
+    if response_matches_language(rewritten, response_language):
+        return rewritten
+    if response_language == "Chinese":
+        return "模型返回的回答语言与当前偏好不一致；我已要求模型按偏好重写，但结果仍未符合。请重试或检查模型配置。"
+    return rewritten or text

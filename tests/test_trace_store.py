@@ -5,7 +5,8 @@ from minicode_agent.runtime import RuntimeContext
 from minicode_agent.tools.executor import ToolExecutor
 from minicode_agent.tools.registry import create_default_registry
 from minicode_agent.tools.types import ToolContext
-from minicode_agent.trace import TraceStore, default_trace_db_path
+from minicode_agent.trace import TraceEvent, TraceStore, default_trace_db_path
+from minicode_agent.trace.store import TRACE_SCHEMA_VERSION
 
 
 def test_trace_store_appends_and_lists_events(tmp_path) -> None:
@@ -17,7 +18,22 @@ def test_trace_store_appends_and_lists_events(tmp_path) -> None:
     events = store.list_events("run_1")
 
     assert [event.event_type for event in events] == ["run_started", "run_finished"]
+    assert events[0].schema_version == TRACE_SCHEMA_VERSION
     assert events[0].payload["goal"] == "test"
+
+
+def test_trace_event_defaults_old_records_to_current_schema_version() -> None:
+    loaded = TraceEvent.model_validate(
+        {
+            "id": "event_1",
+            "run_id": "run_1",
+            "event_type": "tool_requested",
+            "timestamp": "2026-05-31T00:00:00+00:00",
+            "payload": {"tool": "read_file"},
+        }
+    )
+
+    assert loaded.schema_version == TRACE_SCHEMA_VERSION
 
 
 def test_tool_executor_records_trace_events(tmp_path) -> None:
@@ -129,4 +145,5 @@ def test_cli_trace_json_output(tmp_path) -> None:
     result = CliRunner().invoke(app, ["trace", "run_1", "--workspace", str(tmp_path), "--json"])
 
     assert result.exit_code == 0
+    assert f'"schema_version": {TRACE_SCHEMA_VERSION}' in result.output
     assert '"event_type": "tool_requested"' in result.output

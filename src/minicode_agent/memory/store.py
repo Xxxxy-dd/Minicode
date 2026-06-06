@@ -10,6 +10,13 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field, field_validator
 
+from minicode_agent.memory.evidence import memory_evidence_refs
+from minicode_agent.memory.policy import (
+    MemoryAdmissionPolicy,
+    filter_status,
+    normalize_memory_content,
+    score_memory,
+)
 from minicode_agent.security.redaction import contains_secret, safe_payload
 
 
@@ -83,7 +90,7 @@ class MemoryStore:
         for tag in tags or []:
             reject_secret_field(tag, "tag")
         safe_metadata = safe_payload(metadata or {})
-        notes = conflict_notes(self.list(limit=200), MemoryKind(kind), content)
+        notes = MemoryAdmissionPolicy().conflict_notes(self.list(limit=200), MemoryKind(kind), content)
         if notes:
             safe_metadata["conflict_notes"] = notes
         record = MemoryRecord(
@@ -204,11 +211,13 @@ class MemoryStore:
 
     def recall(self, query: str, limit: int = 8) -> list[dict[str, Any]]:
         records = self.search(query, limit=limit)
+
         return [
             {
                 "record": record,
                 "reason": reason,
                 "score": score,
+                "evidence_refs": memory_evidence_refs(record),
             }
             for record in records
             for score, reason in [score_memory(query, record)]
@@ -365,59 +374,9 @@ class MemoryStore:
         return records
 
 
-def normalize_memory_content(content: str) -> str:
-    return " ".join(content.strip().casefold().split())
-
-
 def reject_secret_field(value: str, field: str) -> None:
     if contains_secret(value):
         raise ValueError(f"memory {field} appears to contain a secret")
-
-
-def filter_status(
-    records: list[MemoryRecord],
-    *,
-    status: MemoryStatus | str | None,
-    include_stale: bool,
-) -> list[MemoryRecord]:
-    if status is not None:
-        memory_status = MemoryStatus(status)
-        return [record for record in records if record.status == memory_status]
-    if not include_stale:
-        return [record for record in records if record.status != MemoryStatus.STALE]
-    return records
-
-
-def score_memory(query: str, record: MemoryRecord) -> tuple[float, str]:
-    terms = {term for term in re.findall(r"[\w.-]+", query.lower()) if len(term) >= 3}
-    if not terms:
-        return record.confidence, "recent active memory"
-    content_hits = sum(1 for term in terms if term in record.content.lower())
-    tag_hits = sum(1 for term in terms if term in " ".join(record.tags).lower())
-    kind_hits = sum(1 for term in terms if term in record.kind.value)
-    hit_score = content_hits + (tag_hits * 2) + (kind_hits * 1.5)
-    matched = [
-        term
-        for term in sorted(terms)
-        if term in record.content.lower() or term in " ".join(record.tags).lower() or term in record.kind.value
-    ]
-    if not hit_score:
-        return record.confidence, "no query match"
-    return hit_score + record.confidence, f"matched query terms: {', '.join(matched[:5])}"
-
-
-def conflict_notes(existing_records: list[MemoryRecord], kind: MemoryKind, content: str) -> list[str]:
-    normalized = normalize_memory_content(content)
-    notes: list[str] = []
-    for record in existing_records:
-        if record.kind != kind or record.status != MemoryStatus.ACTIVE:
-            continue
-        old = normalize_memory_content(record.content)
-        if old == normalized:
-            continue
-        if looks_contradictory(old, normalized):
-            notes.append(f"possible conflict with {record.id}")
-    return notes
 
 
 def looks_contradictory(left: str, right: str) -> bool:

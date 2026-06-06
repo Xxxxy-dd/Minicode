@@ -8,6 +8,38 @@ from minicode_agent.core.state import TaskState
 from minicode_agent.tools.types import ToolStateEffect
 
 
+class EvidenceRef(BaseModel):
+    ref_type: str
+    id: str | None = None
+    turn: int | None = None
+    tool: str | None = None
+    path: str | None = None
+    ok: bool | None = None
+    summary: str | None = None
+
+
+class ContextFrame(BaseModel):
+    raw_observation_ids: list[str] = Field(default_factory=list)
+    structured_facts: list[str] = Field(default_factory=list)
+    evidence_refs: list[EvidenceRef] = Field(default_factory=list)
+    failure_refs: list[EvidenceRef] = Field(default_factory=list)
+    diff_refs: list[EvidenceRef] = Field(default_factory=list)
+    test_refs: list[EvidenceRef] = Field(default_factory=list)
+    summary: str = ""
+
+
+class CompressionPolicy(BaseModel):
+    preserve_evidence_refs: bool = True
+    preserve_failure_reasons: bool = True
+    max_summary_chars: int = 1200
+
+
+class PromptSegment(BaseModel):
+    name: str
+    cache_scope: str
+    content: str
+
+
 class CompressionResult(BaseModel):
     task_state: TaskState
     input_chars: int
@@ -19,13 +51,20 @@ class CompressionResult(BaseModel):
     compressed_observation_ids: list[str] = Field(default_factory=list)
     compressed_turns: list[int] = Field(default_factory=list)
     evidence_refs: list[dict[str, Any]] = Field(default_factory=list)
+    context_frame: ContextFrame = Field(default_factory=ContextFrame)
 
 
 class TaskStateCompressor:
     """Deterministic context compressor that preserves structured task state."""
 
-    def __init__(self, max_summary_chars: int = 1200, tool_effects: dict[str, set[ToolStateEffect]] | None = None) -> None:
-        self.max_summary_chars = max_summary_chars
+    def __init__(
+        self,
+        max_summary_chars: int = 1200,
+        tool_effects: dict[str, set[ToolStateEffect]] | None = None,
+        policy: CompressionPolicy | None = None,
+    ) -> None:
+        self.policy = policy or CompressionPolicy(max_summary_chars=max_summary_chars)
+        self.max_summary_chars = self.policy.max_summary_chars
         self.tool_effects = tool_effects or {}
 
     def compress(
@@ -72,6 +111,8 @@ class TaskStateCompressor:
             }
         )
         output_chars = len(compressed_state.model_dump_json())
+        refs = evidence_refs(observations)
+        typed_refs = [EvidenceRef(ref_type="tool_observation", **ref) for ref in refs]
         return CompressionResult(
             task_state=compressed_state,
             input_chars=input_chars,
@@ -81,7 +122,16 @@ class TaskStateCompressor:
             compressed_observations=len(observations),
             compressed_observation_ids=observation_ids(observations),
             compressed_turns=observation_turns(observations),
-            evidence_refs=evidence_refs(observations),
+            evidence_refs=refs,
+            context_frame=ContextFrame(
+                raw_observation_ids=observation_ids(observations),
+                structured_facts=known_facts[-20:],
+                evidence_refs=typed_refs,
+                failure_refs=failure_refs(typed_refs),
+                diff_refs=diff_refs(typed_refs),
+                test_refs=test_refs(typed_refs),
+                summary=summary,
+            ),
         )
 
     def fallback_compress(
@@ -95,6 +145,8 @@ class TaskStateCompressor:
         compressed_state = task_state.model_copy(update={"history_summary": summary})
         output_chars = len(compressed_state.model_dump_json())
         input_chars = len(input_text)
+        refs = evidence_refs(observations)
+        typed_refs = [EvidenceRef(ref_type="tool_observation", **ref) for ref in refs]
         return CompressionResult(
             task_state=compressed_state,
             input_chars=input_chars,
@@ -105,7 +157,15 @@ class TaskStateCompressor:
             compressed_observations=len(observations),
             compressed_observation_ids=observation_ids(observations),
             compressed_turns=observation_turns(observations),
-            evidence_refs=evidence_refs(observations),
+            evidence_refs=refs,
+            context_frame=ContextFrame(
+                raw_observation_ids=observation_ids(observations),
+                evidence_refs=typed_refs,
+                failure_refs=failure_refs(typed_refs),
+                diff_refs=diff_refs(typed_refs),
+                test_refs=test_refs(typed_refs),
+                summary=summary,
+            ),
         )
 
 
@@ -154,6 +214,19 @@ def evidence_refs(observations: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return refs
 
 
+def failure_refs(refs: list[EvidenceRef]) -> list[EvidenceRef]:
+    return [ref for ref in refs if ref.ok is False]
+
+
+def diff_refs(refs: list[EvidenceRef]) -> list[EvidenceRef]:
+    return [ref for ref in refs if "diff" in (ref.tool or "").lower()]
+
+
+def test_refs(refs: list[EvidenceRef]) -> list[EvidenceRef]:
+    markers = ("test", "pytest", "unittest")
+    return [ref for ref in refs if any(marker in (ref.tool or "").lower() for marker in markers)]
+
+
 def extract_known_fact(tool: str, result: str, path: str | None, effects: set[ToolStateEffect] | None = None) -> str | None:
     effects = effects or set()
     text = " ".join(result.split())
@@ -175,3 +248,18 @@ def truncate_text(value: str, max_chars: int) -> str:
     if len(value) <= max_chars:
         return value
     return value[:max_chars] + " [truncated]"
+
+
+def prompt_segments_for_frame(frame: ContextFrame) -> list[PromptSegment]:
+    return [
+        PromptSegment(
+            name="static_system_context",
+            cache_scope="static",
+            content="Use structured task state, evidence refs, and compressed summaries as planning context.",
+        ),
+        PromptSegment(
+            name="dynamic_context_frame",
+            cache_scope="dynamic",
+            content=frame.model_dump_json(),
+        ),
+    ]

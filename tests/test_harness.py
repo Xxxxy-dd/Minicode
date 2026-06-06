@@ -6,7 +6,9 @@ from typer.testing import CliRunner
 
 from minicode_agent.cli.app import app
 from minicode_agent.harness import ForbiddenToolAssertion, HarnessRunner, HarnessTask, SetupCommand, SetupToolCall, SuccessCommand, TeamAssertion, TraceAssertion
-from minicode_agent.harness.runner import run_success_command
+from minicode_agent.harness.runner import render_report, run_success_command
+from minicode_agent.harness.types import EvalResult
+from minicode_agent.trace.store import TraceStore
 
 
 def write_task(path, workspace, command: str, task_id: str = "task_1") -> None:
@@ -301,6 +303,68 @@ def test_harness_writes_markdown_report(tmp_path) -> None:
     assert "pass_rate" in text
     assert "stdout:" in text
     assert "inspect" in text
+
+
+def test_harness_report_includes_memory_and_context_evidence(tmp_path) -> None:
+    trace_store = TraceStore(tmp_path / "trace.db")
+    trace_store.append(
+        "run_report_evidence",
+        "memory_recalled",
+        {
+            "count": 1,
+            "records": [
+                {
+                    "id": "mem_1",
+                    "kind": "failure_memory",
+                    "score": 2.5,
+                    "reason": "matched query terms: pytest",
+                    "evidence_refs": [{"type": "run", "id": "seed_run"}],
+                }
+            ],
+        },
+    )
+    trace_store.append(
+        "run_report_evidence",
+        "context_compressed",
+        {
+            "ratio": 0.25,
+            "compressed_observation_ids": ["obs_1"],
+            "evidence_refs": [{"id": "obs_1", "tool": "run_tests", "ok": False}],
+            "context_frame": {
+                "raw_observation_ids": ["obs_1"],
+                "failure_refs": [{"id": "obs_1"}],
+                "diff_refs": [],
+                "test_refs": [{"id": "obs_1"}],
+            },
+        },
+    )
+    result = EvalResult(
+        task_id="evidence_task",
+        config="full",
+        expected="analysis_only",
+        category="context",
+        tags=["evidence"],
+        difficulty="easy",
+        prompt="inspect trace evidence",
+        source_workspace=str(tmp_path),
+        workspace=str(tmp_path),
+        run_id="run_report_evidence",
+        passed=True,
+        agent_ok=True,
+        runtime_seconds=0.1,
+        metrics={},
+        config_features={},
+        trace_path=str(trace_store.storage_path),
+    )
+
+    report = render_report([result])
+
+    assert "### Memory Evidence" in report
+    assert "memory_recalled: id=mem_1" in report
+    assert "evidence_refs" in report
+    assert "### Context Compression Evidence" in report
+    assert "context_compressed: ratio=0.25" in report
+    assert "failures=1" in report
 
 
 def test_cli_eval_runs_task_file(tmp_path) -> None:

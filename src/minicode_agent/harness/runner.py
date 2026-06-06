@@ -20,6 +20,7 @@ from minicode_agent.runtime import RuntimeContext
 from minicode_agent.tools.executor import ToolExecutor
 from minicode_agent.tools.registry import create_default_registry
 from minicode_agent.tools.types import ToolContext
+from minicode_agent.trace.store import TraceEvent, TraceStore
 
 
 class HarnessRunner:
@@ -330,8 +331,73 @@ def render_report(results: list[EvalResult], config: AblationConfig | None = Non
                 lines.append(f"  - output: {setup_tool.output_summary}")
         for assertion in result.assertion_results:
             lines.append(f"- assertion[{assertion.kind}] `{assertion.target}` passed={assertion.passed}: {assertion.detail}")
+        lines.extend(render_trace_evidence_summary(result))
         lines.append("")
     return "\n".join(lines)
+
+
+def render_trace_evidence_summary(result: EvalResult) -> list[str]:
+    events = load_trace_events(Path(result.trace_path), result.run_id)
+    if not events:
+        return []
+    lines: list[str] = []
+    memory_events = [event for event in events if event.event_type == "memory_recalled"]
+    compression_events = [event for event in events if event.event_type == "context_compressed"]
+    if memory_events:
+        lines.extend(["", "### Memory Evidence"])
+        for event in memory_events:
+            records = event.payload.get("records") or []
+            if not records:
+                lines.append(f"- memory_recalled: count={event.payload.get('count', 0)} records=(none)")
+                continue
+            for record in records[:8]:
+                evidence = compact_json(record.get("evidence_refs") or [])
+                lines.append(
+                    "- memory_recalled: "
+                    f"id={record.get('id')} kind={record.get('kind')} score={record.get('score')} "
+                    f"reason={record.get('reason')} evidence_refs=`{evidence}`"
+                )
+    if compression_events:
+        lines.extend(["", "### Context Compression Evidence"])
+        for event in compression_events:
+            frame = event.payload.get("context_frame") or {}
+            lines.append(
+                "- context_compressed: "
+                f"ratio={event.payload.get('ratio')} compressed_ids={event.payload.get('compressed_observation_ids', [])} "
+                f"evidence_refs=`{compact_json(event.payload.get('evidence_refs') or [])}`"
+            )
+            if frame:
+                lines.append(
+                    "  - context_frame: "
+                    f"raw={frame.get('raw_observation_ids', [])} "
+                    f"failures={len(frame.get('failure_refs') or [])} "
+                    f"diffs={len(frame.get('diff_refs') or [])} "
+                    f"tests={len(frame.get('test_refs') or [])}"
+                )
+    return lines
+
+
+def load_trace_events(trace_path: Path, run_id: str) -> list[TraceEvent]:
+    if not trace_path.exists():
+        return []
+    if trace_path.suffix == ".jsonl":
+        return [
+            event
+            for event in (
+                TraceEvent.model_validate_json(line)
+                for line in trace_path.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            )
+            if event.run_id == run_id
+        ]
+    try:
+        return TraceStore(trace_path).list_events(run_id)
+    except Exception:
+        return []
+
+
+def compact_json(value) -> str:
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
 
 def render_comparison_report(results: list[EvalResult], report_paths: list[Path]) -> str:

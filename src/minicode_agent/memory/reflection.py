@@ -3,8 +3,8 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from minicode_agent.core.state import AgentPhase, AgentState
+from minicode_agent.memory.policy import MemoryAdmissionDecision, MemoryAdmissionPolicy
 from minicode_agent.memory.store import MemoryKind, MemoryRecord
-from minicode_agent.security.redaction import contains_secret, safe_payload
 
 
 @dataclass(frozen=True)
@@ -98,23 +98,11 @@ class DeterministicReflectionEngine:
         )
 
     def admit(self, candidate: MemoryCandidate) -> tuple[MemoryRecord | None, str]:
-        if candidate.confidence < 0.5:
-            return None, "confidence below admission threshold"
-        if contains_secret(candidate.content):
-            return None, "candidate appears to contain a secret"
-        return (
-            MemoryRecord(
-                kind=candidate.kind,
-                content=candidate.content,
-                confidence=candidate.confidence,
-                source_run_id=candidate.source_run_id,
-                tags=candidate.tags,
-                reason=candidate.reason,
-                metadata=safe_payload(candidate.metadata),
-                admission_reason="accepted",
-            ),
-            "accepted",
-        )
+        decision = self.admit_decision(candidate)
+        return decision.record, decision.reason
+
+    def admit_decision(self, candidate: MemoryCandidate) -> MemoryAdmissionDecision:
+        return MemoryAdmissionPolicy().evaluate(candidate)
 
 
 class LLMReflectionEngine:

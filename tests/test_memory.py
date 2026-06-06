@@ -5,6 +5,7 @@ from minicode_agent.cli.app import app
 from minicode_agent.memory import (
     DeterministicReflectionEngine,
     LLMReflectionEngine,
+    MemoryAdmissionPolicy,
     MemoryKind,
     MemoryStatus,
     MemoryStore,
@@ -267,6 +268,47 @@ def test_reflection_admission_rejects_low_confidence() -> None:
     assert "confidence" in reason
 
 
+def test_memory_policy_admits_failure_memory_with_reason() -> None:
+    candidate = MemoryCandidate(
+        kind=MemoryKind.FAILURE,
+        content="Failed attempt during 'fix tests': pytest failed because package import path was missing.",
+        confidence=0.46,
+        source_run_id="run_failure",
+        tags=["reflection", "failure"],
+        reason="failed attempt recorded in task state",
+        metadata={"rule": "failed_attempt", "trace_event_id": "event_1"},
+    )
+
+    decision = MemoryAdmissionPolicy().evaluate(candidate)
+
+    assert decision.accepted
+    assert decision.reason_code == "accepted"
+    assert decision.reason == "accepted"
+    assert decision.record is not None
+    assert decision.record.kind == MemoryKind.FAILURE
+    assert decision.record.metadata["admission_policy"] == "default"
+    assert {"type": "trace_event", "id": "event_1"} in decision.evidence_refs
+
+
+def test_memory_recall_records_evidence_refs(tmp_path) -> None:
+    store = MemoryStore(tmp_path / "memory.db")
+    memory, _ = store.add(
+        MemoryKind.FAILURE,
+        "pytest failed because PYTHONPATH did not include src.",
+        confidence=0.9,
+        source_run_id="run_pytest_failure",
+        tags=["pytest", "failure"],
+        metadata={"rule": "failed_attempt", "path": "tests/test_app.py"},
+    )
+
+    recalled = store.recall("pytest failure")
+
+    assert recalled[0]["record"].id == memory.id
+    assert {"type": "run", "id": "run_pytest_failure"} in recalled[0]["evidence_refs"]
+    assert {"type": "file", "path": "tests/test_app.py"} in recalled[0]["evidence_refs"]
+    assert {"type": "rule", "id": "failed_attempt"} in recalled[0]["evidence_refs"]
+
+
 def test_agent_loop_writes_reflection_memory(tmp_path) -> None:
     (tmp_path / "README.md").write_text("# Demo\n", encoding="utf-8")
     runtime = RuntimeContext.create(tmp_path, run_id="agent_memory_test")
@@ -282,6 +324,7 @@ def test_agent_loop_writes_reflection_memory(tmp_path) -> None:
     written = next(event for event in events if event.event_type == "memory_written")
     assert written.payload["id"]
     assert written.payload["admission_reason"] == "accepted"
+    assert written.payload["admission_reason_code"] == "accepted"
     assert written.payload["evidence_refs"]
     assert runtime.memory_store.get(written.payload["id"]) is not None
 

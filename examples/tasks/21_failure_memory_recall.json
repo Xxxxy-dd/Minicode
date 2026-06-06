@@ -1,0 +1,19 @@
+{
+  "id": "failure_memory_recall",
+  "workspace": "../repos/mini_py",
+  "prompt": "Inspect the project and use the remembered pytest failure context if relevant.",
+  "expected": "analysis_only",
+  "category": "memory",
+  "tags": ["memory", "failure-memory", "recall", "trace"],
+  "difficulty": "medium",
+  "setup": [
+    {
+      "command": "{python} -c \"from pathlib import Path; from minicode_agent.memory import MemoryKind, MemoryStore, default_memory_db_path; store=MemoryStore(default_memory_db_path(Path('.'))); store.add(MemoryKind.FAILURE, 'pytest failed because PYTHONPATH did not include src.', confidence=0.9, source_run_id='seed_failure', tags=['pytest','failure'], metadata={'rule':'failed_attempt','path':'tests/test_app.py'})\"",
+      "exit_code": 0
+    }
+  ],
+  "trace_assertions": [
+    {"event_type": "memory_recalled", "min_count": 1}
+  ],
+  "success": []
+}

@@ -50,6 +50,8 @@ def test_v1_2_tasks_cover_team_worktree_and_prompt_injection() -> None:
         "prompt_injection_diff": "safety",
         "worktree_clean_isolation": "team",
         "worktree_dirty_blocker": "team",
+        "failure_memory_recall": "memory",
+        "context_evidence_compression": "context",
     }
 
     for task_id, category in expected.items():
@@ -57,6 +59,8 @@ def test_v1_2_tasks_cover_team_worktree_and_prompt_injection() -> None:
 
     assert by_id["worktree_clean_isolation"].team_assertions
     assert by_id["worktree_dirty_blocker"].team_assertions
+    assert by_id["failure_memory_recall"].trace_assertions
+    assert by_id["context_evidence_compression"].trace_assertions
 
 
 def test_benchmark_tasks_have_metadata() -> None:

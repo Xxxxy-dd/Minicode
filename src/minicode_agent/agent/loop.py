@@ -7,7 +7,14 @@ from minicode_agent.context import TaskStateCompressor
 from minicode_agent.core.state import AgentPhase, AgentState, RunMetrics, TaskState
 from minicode_agent.agent.planner import ModelDecision, ModelDrivenPlanner, PlannedAction, RuleBasedPlanner, choose_entry_context_file
 from minicode_agent.intent import tool_intent_mismatch_reason
-from minicode_agent.memory import DeterministicReflectionEngine, LLMReflectionEngine, MemoryKind, MemoryRecord, MemoryReflectionResult
+from minicode_agent.memory import (
+    DeterministicReflectionEngine,
+    LLMReflectionEngine,
+    MemoryKind,
+    MemoryRecord,
+    MemoryReflectionResult,
+    memory_evidence_refs,
+)
 from minicode_agent.models import ModelClient
 from minicode_agent.runtime import RuntimeContext
 from minicode_agent.skills import SkillDefinition, SkillError, SkillRouter, default_skill_registry
@@ -48,6 +55,7 @@ class AgentLoop:
         enable_skill_rerank: bool = False,
         enable_memory: bool = True,
         enable_compression: bool = True,
+        compress_rule_observations: bool = True,
         enable_subagents: bool = True,
         memory_reflection_mode: str = "deterministic",
         event_callback=None,
@@ -69,6 +77,7 @@ class AgentLoop:
         self.enable_skill_rerank = enable_skill_rerank
         self.enable_memory = enable_memory
         self.enable_compression = enable_compression
+        self.compress_rule_observations = compress_rule_observations
         self.enable_subagents = enable_subagents
         self.memory_reflection_mode = normalize_memory_reflection_mode(memory_reflection_mode)
         self.event_callback = event_callback
@@ -140,7 +149,7 @@ class AgentLoop:
                             "reason": item["reason"],
                             "source_run_id": item["record"].source_run_id,
                             "status": item["record"].status.value,
-                            "evidence_refs": memory_evidence_refs(item["record"]),
+                            "evidence_refs": item.get("evidence_refs", memory_evidence_refs(item["record"])),
                         }
                         for item in recalled_memories
                     ],
@@ -221,6 +230,20 @@ class AgentLoop:
 
         self._phase(AgentPhase.OBSERVE, "Inspect the result.")
         self._observe("agent_observed", {"result": action_result["result"], "ok": action_result["ok"]})
+        self.observations.append(
+            {
+                "tool": action_result["tool"],
+                "ok": action_result["ok"],
+                "result": action_result["result"],
+                "output": action_result["output"],
+                "error": action_result["error"],
+                "metadata": action_result["metadata"],
+                "truncated": action_result["truncated"],
+                "turn": 1,
+                "id": "obs_1",
+            }
+        )
+        self._maybe_compress_context(rule_path=True)
 
         self._phase(AgentPhase.VERIFY, "Verify the run outcome.")
         verified = self._verify(action_result)
@@ -341,7 +364,7 @@ class AgentLoop:
             }
             self.observations.append(observation)
             self._observe("agent_observed", observation)
-            self._maybe_compress_context()
+            self._maybe_compress_context(rule_path=False)
 
             if action_result["metadata"].get("permission") == "ask":
                 self.failure_reason = str(action_result["result"])
@@ -496,7 +519,10 @@ class AgentLoop:
         rejected_reasons: dict[str, int] = {}
         duplicates = 0
         for candidate in reflection.candidates:
-            record, admission_reason = self.reflection_engine.admit(candidate)
+            admission_decision = self.reflection_engine.admit_decision(candidate)
+            record = admission_decision.record
+            admission_reason = admission_decision.reason
+            admission_reason_code = admission_decision.reason_code.value
             if record is None:
                 skipped += 1
                 rejected_reasons[admission_reason] = rejected_reasons.get(admission_reason, 0) + 1
@@ -505,9 +531,10 @@ class AgentLoop:
                     {
                         "kind": candidate.kind.value,
                         "reason": admission_reason,
+                        "reason_code": admission_reason_code,
                         "candidate_reason": candidate.reason,
                         "source_run_id": candidate.source_run_id,
-                        "evidence_refs": [{"type": "run", "id": candidate.source_run_id}],
+                        "evidence_refs": admission_decision.evidence_refs,
                     },
                 )
                 continue
@@ -530,6 +557,7 @@ class AgentLoop:
                     {
                         "kind": record.kind.value,
                         "reason": str(exc),
+                        "reason_code": "secret_detected",
                         "candidate_reason": record.reason,
                         "source_run_id": record.source_run_id,
                         "evidence_refs": memory_evidence_refs(record),
@@ -547,6 +575,7 @@ class AgentLoop:
                         "confidence": stored_record.confidence,
                         "reason": stored_record.reason,
                         "admission_reason": stored_record.admission_reason,
+                        "admission_reason_code": stored_record.metadata.get("admission_reason_code", admission_reason_code),
                         "tags": stored_record.tags,
                         "source_run_id": stored_record.source_run_id,
                         "status": stored_record.status.value,
@@ -563,6 +592,7 @@ class AgentLoop:
                         "id": stored_record.id,
                         "kind": stored_record.kind.value,
                         "reason": "duplicate memory",
+                        "reason_code": "duplicate",
                         "candidate_reason": record.reason,
                         "source_run_id": record.source_run_id,
                         "evidence_refs": memory_evidence_refs(stored_record),
@@ -656,8 +686,10 @@ class AgentLoop:
             return f"已完成 {action.tool}({target})。结果：\n{output}"
         return f"已完成 {action.tool}({target})。"
 
-    def _maybe_compress_context(self) -> None:
+    def _maybe_compress_context(self, *, rule_path: bool = False) -> None:
         if not self.enable_compression:
+            return
+        if rule_path and not self.compress_rule_observations:
             return
         if not self.observations:
             return
@@ -698,6 +730,7 @@ class AgentLoop:
                 "compressed_observation_ids": result.compressed_observation_ids,
                 "compressed_turns": result.compressed_turns,
                 "evidence_refs": result.evidence_refs,
+                "context_frame": result.context_frame.model_dump(),
                 "task_state": result.task_state.model_dump(),
             },
         )
@@ -775,6 +808,7 @@ class AgentLoop:
             "skill_rerank": self.enable_skill_rerank,
             "memory": self.enable_memory,
             "compression": self.enable_compression,
+            "compress_rule_observations": self.compress_rule_observations,
             "subagents": self.enable_subagents,
             "memory_reflection_mode": self.memory_reflection_mode,
         }
@@ -818,16 +852,3 @@ def observation_body(observation: dict[str, Any]) -> str:
 
 def action_identity(tool: str, arguments: dict[str, Any]) -> str:
     return json.dumps({"tool": tool, "arguments": arguments}, ensure_ascii=False, sort_keys=True, default=str)
-
-
-def memory_evidence_refs(record: MemoryRecord) -> list[dict[str, Any]]:
-    refs: list[dict[str, Any]] = []
-    if record.source_run_id:
-        refs.append({"type": "run", "id": record.source_run_id})
-    path = record.metadata.get("path") if isinstance(record.metadata, dict) else None
-    if path:
-        refs.append({"type": "file", "path": path})
-    rule = record.metadata.get("rule") if isinstance(record.metadata, dict) else None
-    if rule:
-        refs.append({"type": "rule", "id": rule})
-    return refs

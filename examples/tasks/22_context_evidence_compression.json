@@ -1,0 +1,19 @@
+{
+  "id": "context_evidence_compression",
+  "workspace": "../repos/mini_py",
+  "prompt": "Inspect the project README and preserve evidence while summarizing the long context.",
+  "expected": "analysis_only",
+  "category": "context",
+  "tags": ["compression", "context-frame", "evidence", "trace"],
+  "difficulty": "medium",
+  "setup": [
+    {
+      "command": "{python} -c \"from pathlib import Path; Path('README.md').write_text('A' * 5000, encoding='utf-8')\"",
+      "exit_code": 0
+    }
+  ],
+  "trace_assertions": [
+    {"event_type": "context_compressed", "min_count": 1}
+  ],
+  "success": []
+}

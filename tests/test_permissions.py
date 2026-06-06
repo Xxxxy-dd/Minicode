@@ -169,7 +169,8 @@ def test_default_tool_cross_cutting_policies_are_declared() -> None:
     assert registry.get("run_linter").spec.input_schema["anyOf"]
     assert registry.get("read_file").spec.capture_full_output is True
     assert registry.get("spawn_subagent").spec.counts_as_subagent_call is True
-    assert registry.get("read_file").spec.subagent_roles == ("explorer", "reviewer")
+    assert registry.get("read_file").spec.subagent_roles == ("explorer", "reviewer", "security-reviewer")
+    assert registry.get("run_tests").spec.subagent_roles == ("tester",)
     assert registry.get("write_file").spec.subagent_roles == ()
 
 

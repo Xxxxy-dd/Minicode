@@ -85,7 +85,7 @@ class ReadFileTool(BaseTool):
         state_effects=(ToolStateEffect.RECORDS_PATH_FACT,),
         intents=(ToolIntent.FILE_READ,),
         capture_full_output=True,
-        subagent_roles=("explorer", "reviewer"),
+        subagent_roles=("explorer", "reviewer", "security-reviewer"),
         path_arg_names=("path",),
         capability="file_read",
     )
@@ -117,7 +117,7 @@ class SearchCodeTool(BaseTool):
         duplicate_policy=DuplicatePolicy.BLOCK_IDENTICAL_SUCCESS,
         state_effects=(ToolStateEffect.RECORDS_PATH_FACT,),
         intents=(ToolIntent.FILE_SEARCH,),
-        subagent_roles=("explorer", "reviewer"),
+        subagent_roles=("explorer", "reviewer", "security-reviewer"),
         capability="code_search",
     )
 
@@ -155,7 +155,7 @@ class GitStatusTool(BaseTool):
         duplicate_policy=DuplicatePolicy.BLOCK_IDENTICAL_SUCCESS,
         state_effects=(ToolStateEffect.RECORDS_OUTPUT_FACT,),
         intents=(ToolIntent.REPO_INSPECT,),
-        subagent_roles=("explorer", "reviewer"),
+        subagent_roles=("explorer", "reviewer", "security-reviewer"),
         capability="git_status",
     )
 
@@ -172,7 +172,7 @@ class GitDiffTool(BaseTool):
         duplicate_policy=DuplicatePolicy.BLOCK_IDENTICAL_SUCCESS,
         state_effects=(ToolStateEffect.RECORDS_OUTPUT_FACT,),
         intents=(ToolIntent.FILE_SEARCH, ToolIntent.REPO_INSPECT),
-        subagent_roles=("reviewer",),
+        subagent_roles=("reviewer", "security-reviewer"),
         capability="git_diff",
     )
 

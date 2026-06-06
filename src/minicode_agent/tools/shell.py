@@ -39,6 +39,7 @@ class RunTestsTool(BaseTool):
         permission=PermissionMode.ASK,
         intents=(ToolIntent.TEST_RUN, ToolIntent.COMMAND_RUN),
         command_arg_names=("command", "argv"),
+        subagent_roles=("tester",),
         capability="test_command",
         timeout_seconds=60,
     )

@@ -33,6 +33,30 @@ Write-class tools use a preview -> approval -> execute flow:
 
 Runs write trace events for requests, permission checks, write previews, approval decisions, tool results, compression, subagent activity, memory recall, memory rejection, and memory writes. Trace payloads are sanitized in `TraceStore` before persistence, so direct trace callers, tool executors, and memory paths share the same redaction boundary.
 
+## Prompt Injection Boundary
+
+MiniCode treats workspace files, diffs, command output, test logs, and tool observations as untrusted data. They can provide evidence for the task, but they cannot redefine the user's goal, bypass permissions, or request additional tools.
+
+Day 1 of V1.2 adds a rule-based prompt injection layer:
+
+- `TrustLevel` marks observations as `untrusted_workspace` or `untrusted_command_output`.
+- `PromptBoundary` is included in planning prompts so the model sees the trusted instruction boundary explicitly.
+- `InjectionFinding` records matched rule id, source tool, trust level, matched text, disposition, and evidence.
+- `ToolExecutor` scans successful tool observations and emits `injection_detected` trace events.
+- `security-reviewer` can return structured `security_findings` and merge blockers from diff/status evidence.
+
+The detector is intentionally deterministic and conservative. It covers common patterns such as attempts to ignore previous instructions, delete workspace files, exfiltrate secrets, run network commands, or bypass approval policy. Detection does not automatically stop every task; it makes the suspicious instruction observable and keeps it from becoming trusted task intent.
+
+Recommended local verification commands on this workspace:
+
+```powershell
+$env:PYTHONPATH = "src"
+E:\conda\envs\minicode\python.exe -m pytest -q --basetemp .pytest-tmp-v12-day1
+E:\conda\envs\minicode\python.exe -c "from typer.testing import CliRunner; from minicode_agent.cli.app import app; r=CliRunner().invoke(app, ['eval','examples/tasks/16_prompt_injection_readme.json','--workspace','.','--config','full']); print(r.output); raise SystemExit(r.exit_code)"
+E:\conda\envs\minicode\python.exe -c "from typer.testing import CliRunner; from minicode_agent.cli.app import app; r=CliRunner().invoke(app, ['eval','examples/tasks/17_prompt_injection_command_output.json','--workspace','.','--config','full']); print(r.output); raise SystemExit(r.exit_code)"
+E:\conda\envs\minicode\python.exe -c "from typer.testing import CliRunner; from minicode_agent.cli.app import app; r=CliRunner().invoke(app, ['eval','examples/tasks/18_prompt_injection_diff.json','--workspace','.','--config','full']); print(r.output); raise SystemExit(r.exit_code)"
+```
+
 ## Memory Safety
 
 Memory records carry `status`, `reason`, `admission_reason`, tags, metadata, and source run id. Active records are recalled with a traceable reason and score; stale records are skipped by default. Memory content, reasons, tags, metadata, and trace payloads share the same secret redaction policy, and candidate records that look like credentials are rejected before storage.

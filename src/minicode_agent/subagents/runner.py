@@ -4,6 +4,7 @@ from pathlib import Path
 import re
 from typing import Any
 
+from minicode_agent.security import detect_injection, finding_payloads, trust_level_for_tool
 from minicode_agent.tools.types import ToolObservation
 from minicode_agent.subagents.types import SubagentRequest, SubagentResult, SubagentRole
 from minicode_agent.tools.types import ToolContext
@@ -11,7 +12,7 @@ from minicode_agent.trace import TraceStore
 
 
 class SubagentRunner:
-    """Runs a bounded, read-only subagent through the normal tool executor."""
+    """Runs a bounded subagent through the normal tool executor."""
 
     def __init__(
         self,
@@ -48,7 +49,8 @@ class SubagentRunner:
         for tool_name, arguments in planned_actions(request):
             if tool_calls >= request.max_steps:
                 break
-            observation = executor.execute(tool_name, context, arguments)
+            approved = request.role == SubagentRole.TESTER and tool_name == "run_tests"
+            observation = executor.execute(tool_name, context, arguments, approved=approved)
             tool_calls += 1
             observations.append((tool_name, observation))
             evidence.append(
@@ -69,6 +71,11 @@ class SubagentRunner:
 
         stopped_reason = "max_steps" if tool_calls >= request.max_steps else "planned_actions_exhausted"
         review = reviewer_review(observations) if request.role == SubagentRole.REVIEWER else {}
+        security_review = security_reviewer_review(observations) if request.role == SubagentRole.SECURITY_REVIEWER else {}
+        test_review = tester_review(observations) if request.role == SubagentRole.TESTER else {}
+        review_blockers = review.get("merge_blockers", [])
+        security_blockers = security_review.get("merge_blockers", [])
+        test_blockers = test_review.get("merge_blockers", [])
         result = SubagentResult(
             role=request.role,
             task=request.task,
@@ -80,8 +87,10 @@ class SubagentRunner:
             denied_tools=denied_tools,
             changed_files=review.get("changed_files", []),
             risks=review.get("risks", []),
+            security_findings=security_review.get("security_findings", []),
             test_suggestions=review.get("test_suggestions", []),
-            merge_blockers=review.get("merge_blockers", []),
+            test_results=test_review.get("test_results", []),
+            merge_blockers=sorted(set(review_blockers + security_blockers + test_blockers)),
             tool_calls=tool_calls,
             stopped_reason=stopped_reason,
         )
@@ -117,7 +126,9 @@ def denied_subagent_tools(role: SubagentRole) -> list[str]:
 def planned_actions(request: SubagentRequest) -> list[tuple[str, dict]]:
     if request.role == SubagentRole.IMPLEMENTER:
         return []
-    if request.role == SubagentRole.REVIEWER:
+    if request.role == SubagentRole.TESTER:
+        return [("run_tests", {"timeout_seconds": 60})]
+    if request.role in {SubagentRole.REVIEWER, SubagentRole.SECURITY_REVIEWER}:
         return [("git_diff", {"stat": False}), ("git_status", {})]
     if request.path and request.pattern:
         return [("read_file", {"path": request.path}), ("search_code", {"pattern": request.pattern})]
@@ -140,7 +151,7 @@ def format_finding(tool_name: str, output: str) -> str:
 def summarize_findings(role: SubagentRole, findings: list[str]) -> str:
     if not findings:
         return f"{role.value} completed without findings."
-    return f"{role.value} completed {len(findings)} read-only tool call(s)."
+    return f"{role.value} completed {len(findings)} role tool call(s)."
 
 
 def reviewer_review(observations: list[tuple[str, ToolObservation]]) -> dict[str, list[str]]:
@@ -171,6 +182,62 @@ def reviewer_review(observations: list[tuple[str, ToolObservation]]) -> dict[str
         "test_suggestions": test_suggestions,
         "merge_blockers": merge_blockers,
     }
+
+
+def security_reviewer_review(observations: list[tuple[str, ToolObservation]]) -> dict[str, list]:
+    security_findings: list[dict[str, Any]] = []
+    merge_blockers: list[str] = []
+    for tool_name, observation in observations:
+        metadata_findings = observation.metadata.get("security_findings")
+        if isinstance(metadata_findings, list):
+            security_findings.extend(metadata_findings)
+            continue
+        trust_level = trust_level_for_tool(tool_name)
+        security_findings.extend(
+            finding_payloads(
+                detect_injection(
+                    observation.output,
+                    source=tool_name,
+                    trust_level=trust_level,
+                    evidence={
+                        "tool_call_id": observation.tool_call_id,
+                        "tool": tool_name,
+                        "metadata": observation.metadata,
+                    },
+                )
+            )
+        )
+    if security_findings:
+        merge_blockers.append("untrusted content contains possible prompt injection; review before applying changes")
+    return {"security_findings": security_findings, "merge_blockers": merge_blockers}
+
+
+def tester_review(observations: list[tuple[str, ToolObservation]]) -> dict[str, list]:
+    test_results: list[dict[str, Any]] = []
+    merge_blockers: list[str] = []
+    for tool_name, observation in observations:
+        if tool_name != "run_tests":
+            continue
+        exit_code = observation.metadata.get("exit_code")
+        timed_out = bool(observation.metadata.get("timed_out"))
+        passed = observation.ok and exit_code == 0 and not timed_out
+        test_results.append(
+            {
+                "tool": tool_name,
+                "ok": observation.ok,
+                "passed": passed,
+                "exit_code": exit_code,
+                "timed_out": timed_out,
+                "output_chars": len(observation.output),
+                "error": observation.error,
+                "command": observation.metadata.get("command"),
+            }
+        )
+        if not passed:
+            merge_blockers.append("tester did not collect a passing test result")
+    if not test_results:
+        merge_blockers.append("tester did not run a test command")
+    return {"test_results": test_results, "merge_blockers": merge_blockers}
 
 
 def diff_changed_files(diff: str) -> set[str]:

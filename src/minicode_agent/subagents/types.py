@@ -6,6 +6,8 @@ from pydantic import BaseModel, Field, field_validator
 class SubagentRole(StrEnum):
     EXPLORER = "explorer"
     REVIEWER = "reviewer"
+    SECURITY_REVIEWER = "security-reviewer"
+    TESTER = "tester"
     IMPLEMENTER = "implementer"
 
 
@@ -35,7 +37,10 @@ class SubagentResult(BaseModel):
     denied_tools: list[str] = Field(default_factory=list)
     changed_files: list[str] = Field(default_factory=list)
     risks: list[str] = Field(default_factory=list)
+    security_findings: list[dict] = Field(default_factory=list)
     test_suggestions: list[str] = Field(default_factory=list)
+    test_results: list[dict] = Field(default_factory=list)
     merge_blockers: list[str] = Field(default_factory=list)
+    patch_proposal: dict | None = None
     tool_calls: int = 0
     stopped_reason: str

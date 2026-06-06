@@ -13,10 +13,13 @@ from uuid import uuid4
 from minicode_agent.agent import AgentLoop
 from minicode_agent.harness.assertions import evaluate_assertions
 from minicode_agent.harness.configs import AblationConfig, ablation_config_names, load_ablation_config_file, resolve_ablation_config
-from minicode_agent.harness.types import EvalResult, HarnessTask, SuccessCommand, SuccessResult
+from minicode_agent.harness.types import EvalResult, HarnessTask, SetupToolCall, SetupToolResult, SuccessCommand, SuccessResult
 from minicode_agent.models import OpenAICompatibleClient
 from minicode_agent.config import MiniCodeConfig
 from minicode_agent.runtime import RuntimeContext
+from minicode_agent.tools.executor import ToolExecutor
+from minicode_agent.tools.registry import create_default_registry
+from minicode_agent.tools.types import ToolContext
 
 
 class HarnessRunner:
@@ -49,7 +52,9 @@ class HarnessRunner:
     def run_task(self, task: HarnessTask) -> EvalResult:
         started_at = time.perf_counter()
         workspace = self.prepare_workspace(task)
+        setup_results = [run_success_command(command, workspace) for command in task.setup]
         runtime = RuntimeContext.create(workspace, run_kind="eval")
+        setup_tool_results = run_setup_tools(task.setup_tools, runtime)
         aux_model_client = self._build_aux_model_client()
         result = AgentLoop(
             runtime,
@@ -61,9 +66,11 @@ class HarnessRunner:
         trace_events = runtime.trace_store.list_events(runtime.run_id)
         assertion_results = evaluate_assertions(task, workspace, trace_events)
         agent_ok = result.state.current_phase.value == "done"
+        setup_passed = all(setup.passed for setup in setup_results)
+        setup_tools_passed = all(setup.ok for setup in setup_tool_results)
         command_passed = all(success.passed for success in success_results)
         assertions_passed = all(assertion.passed for assertion in assertion_results)
-        passed = evaluate_outcome(task, agent_ok, command_passed, assertions_passed, has_success_commands=bool(task.success))
+        passed = setup_passed and setup_tools_passed and evaluate_outcome(task, agent_ok, command_passed, assertions_passed, has_success_commands=bool(task.success))
         runtime_seconds = round(time.perf_counter() - started_at, 3)
         runtime.trace_store.append(
             runtime.run_id,
@@ -74,6 +81,8 @@ class HarnessRunner:
                 "expected": task.expected.value,
                 "passed": passed,
                 "runtime_seconds": runtime_seconds,
+                "setup_count": len(setup_results),
+                "setup_tool_count": len(setup_tool_results),
                 "success_count": len(success_results),
                 "assertion_count": len(assertion_results),
             },
@@ -92,6 +101,8 @@ class HarnessRunner:
             passed=passed,
             agent_ok=agent_ok,
             runtime_seconds=runtime_seconds,
+            setup_results=setup_results,
+            setup_tool_results=setup_tool_results,
             success_results=success_results,
             assertion_results=assertion_results,
             metrics=result.state.metrics.model_dump(),
@@ -171,6 +182,35 @@ def run_success_command(command: SuccessCommand, workspace: Path) -> SuccessResu
         stdout_summary=summarize_stream(completed.stdout),
         stderr_summary=summarize_stream(completed.stderr),
     )
+
+
+def run_setup_tools(tool_calls: list[SetupToolCall], runtime: RuntimeContext) -> list[SetupToolResult]:
+    if not tool_calls:
+        return []
+    executor = ToolExecutor(create_default_registry(), trace_store=runtime.trace_store, run_id=runtime.run_id)
+    context = ToolContext(workspace=runtime.workspace)
+    results: list[SetupToolResult] = []
+    for call in tool_calls:
+        observation = executor.execute(call.tool, context, substitute_python_placeholder(call.arguments), approved=call.approved)
+        results.append(
+            SetupToolResult(
+                tool=call.tool,
+                ok=observation.ok,
+                error=observation.error,
+                output_summary=summarize_stream(observation.output),
+            )
+        )
+    return results
+
+
+def substitute_python_placeholder(value):
+    if isinstance(value, str):
+        return value.replace("{python}", sys.executable)
+    if isinstance(value, list):
+        return [substitute_python_placeholder(item) for item in value]
+    if isinstance(value, dict):
+        return {key: substitute_python_placeholder(item) for key, item in value.items()}
+    return value
 
 
 def run_all_configs(root: Path, taskset: Path) -> tuple[list[EvalResult], Path]:
@@ -272,6 +312,22 @@ def render_report(results: list[EvalResult], config: AblationConfig | None = Non
                 lines.append(f"  - stdout: {success.stdout_summary}")
             if success.stderr_summary:
                 lines.append(f"  - stderr: {success.stderr_summary}")
+        for setup in result.setup_results:
+            lines.append(
+                f"- setup: `{setup.command}` -> {setup.exit_code} "
+                f"(expected {setup.expected_exit_code}) passed={setup.passed}"
+            )
+            if setup.stdout_summary:
+                lines.append(f"  - stdout: {setup.stdout_summary}")
+            if setup.stderr_summary:
+                lines.append(f"  - stderr: {setup.stderr_summary}")
+        for setup_tool in result.setup_tool_results:
+            lines.append(
+                f"- setup_tool: `{setup_tool.tool}` ok={setup_tool.ok}"
+                + (f" error={setup_tool.error}" if setup_tool.error else "")
+            )
+            if setup_tool.output_summary:
+                lines.append(f"  - output: {setup_tool.output_summary}")
         for assertion in result.assertion_results:
             lines.append(f"- assertion[{assertion.kind}] `{assertion.target}` passed={assertion.passed}: {assertion.detail}")
         lines.append("")

@@ -41,6 +41,24 @@ def test_v1_1_tasks_cover_day6_categories() -> None:
     assert by_id["agent_team_reviewer"].team_assertions
 
 
+def test_v1_2_tasks_cover_team_worktree_and_prompt_injection() -> None:
+    tasks = HarnessRunner(Path.cwd()).load_tasks(TASKS_DIR)
+    by_id = {task.id: task for task in tasks}
+    expected = {
+        "prompt_injection_readme": "safety",
+        "prompt_injection_command_output": "safety",
+        "prompt_injection_diff": "safety",
+        "worktree_clean_isolation": "team",
+        "worktree_dirty_blocker": "team",
+    }
+
+    for task_id, category in expected.items():
+        assert by_id[task_id].category == category
+
+    assert by_id["worktree_clean_isolation"].team_assertions
+    assert by_id["worktree_dirty_blocker"].team_assertions
+
+
 def test_benchmark_tasks_have_metadata() -> None:
     tasks = HarnessRunner(Path.cwd()).load_tasks(TASKS_DIR)
 

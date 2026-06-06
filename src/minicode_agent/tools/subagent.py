@@ -11,14 +11,14 @@ from minicode_agent.tools.types import PermissionMode, RiskLevel, ToolContext, T
 class SpawnSubagentTool(BaseTool):
     spec = ToolSpec(
         name="spawn_subagent",
-        description="Run a bounded read-only explorer or reviewer subagent and return structured findings.",
+        description="Run a bounded explorer, reviewer, tester, security-reviewer, or implementer role and return structured findings.",
         risk_level=RiskLevel.SAFE,
         permission=PermissionMode.ALLOW,
         counts_as_subagent_call=True,
         input_schema={
-            "role": "explorer | reviewer",
+            "role": "explorer | reviewer | tester | security-reviewer | implementer",
             "task": "Subtask for the subagent.",
-            "max_steps": "Optional max read-only tool calls, capped at 5.",
+            "max_steps": "Optional max role tool calls, capped at 5.",
             "path": "Optional relative file path for explorer reads.",
             "pattern": "Optional search pattern for explorer search.",
         },

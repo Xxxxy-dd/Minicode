@@ -16,6 +16,18 @@ class SuccessCommand(BaseModel):
     timeout_seconds: int = 30
 
 
+class SetupCommand(BaseModel):
+    command: str
+    exit_code: int = 0
+    timeout_seconds: int = 30
+
+
+class SetupToolCall(BaseModel):
+    tool: str
+    arguments: dict = Field(default_factory=dict)
+    approved: bool = False
+
+
 class TraceAssertion(BaseModel):
     event_type: str
     min_count: int = 1
@@ -41,6 +53,8 @@ class HarnessTask(BaseModel):
     id: str
     workspace: Path = Path(".")
     prompt: str
+    setup: list[SetupCommand] = Field(default_factory=list)
+    setup_tools: list[SetupToolCall] = Field(default_factory=list)
     success: list[SuccessCommand] = Field(default_factory=list)
     trace_assertions: list[TraceAssertion] = Field(default_factory=list)
     forbidden_tools: list[ForbiddenToolAssertion] = Field(default_factory=list)
@@ -72,6 +86,13 @@ class SuccessResult(BaseModel):
     stderr_summary: str = ""
 
 
+class SetupToolResult(BaseModel):
+    tool: str
+    ok: bool
+    error: str | None = None
+    output_summary: str = ""
+
+
 class AssertionResult(BaseModel):
     kind: str
     target: str
@@ -93,6 +114,8 @@ class EvalResult(BaseModel):
     passed: bool
     agent_ok: bool
     runtime_seconds: float
+    setup_results: list[SuccessResult] = Field(default_factory=list)
+    setup_tool_results: list[SetupToolResult] = Field(default_factory=list)
     success_results: list[SuccessResult] = Field(default_factory=list)
     assertion_results: list[AssertionResult] = Field(default_factory=list)
     metrics: dict = Field(default_factory=dict)

@@ -1,0 +1,36 @@
+{
+  "id": "worktree_clean_isolation",
+  "workspace": "../repos/mini_py",
+  "prompt": "Summarize the isolated implementer patch proposal produced during setup.",
+  "expected": "analysis_only",
+  "category": "team",
+  "tags": ["subagent", "team", "worktree", "patch-proposal"],
+  "difficulty": "medium",
+  "setup": [
+    {"command": "git init", "exit_code": 0},
+    {"command": "git add .", "exit_code": 0},
+    {"command": "git -c user.name=Test -c user.email=test@example.com commit -m init", "exit_code": 0}
+  ],
+  "setup_tools": [
+    {
+      "tool": "spawn_subagent",
+      "arguments": {
+        "role": "implementer",
+        "task": "prepare an isolated patch proposal without merging",
+        "max_steps": 1
+      }
+    }
+  ],
+  "trace_assertions": [
+    {"event_type": "worktree_created", "min_count": 1},
+    {"event_type": "team_role_completed", "min_count": 1, "payload_contains": {"role": "implementer", "patch_proposal.will_merge": "False"}}
+  ],
+  "team_assertions": [
+    {"role": "implementer", "require_evidence": true, "require_merge_blocker": true}
+  ],
+  "forbidden_tools": [
+    {"tool": "write_file"},
+    {"tool": "apply_patch"}
+  ],
+  "success": []
+}

@@ -2,6 +2,7 @@ import time
 from typing import Any, Callable
 
 from minicode_agent.permissions.policy import PermissionPolicy
+from minicode_agent.security import detect_injection, finding_payloads, trust_level_for_tool, trust_level_reason_for_tool
 from minicode_agent.trace.store import TraceStore, safe_trace_payload
 from minicode_agent.tools.base import ToolError
 from minicode_agent.tools.preview import build_write_preview
@@ -91,11 +92,16 @@ class ToolExecutor:
                 self._trace_observation(observation, started_at)
                 return observation
             if preview is not None:
+                preview_metadata = preview.metadata()
+                preview_findings = self._detect_preview_security(name, preview_metadata)
+                if preview_findings:
+                    preview_metadata["security_findings"] = preview_findings
+                    preview_metadata["injection_detected"] = True
                 self._trace(
                     "write_preview",
                     {
                         "tool": name,
-                        "preview": preview.metadata(),
+                        "preview": preview_metadata,
                         "permission": decision.mode.value,
                         "reason": decision.reason,
                     },
@@ -149,6 +155,7 @@ class ToolExecutor:
                 "preview": preview.metadata() if preview else None,
             }
         )
+        self._annotate_security(name, observation)
         observation.truncated = observation.truncated or bool(observation.metadata.get("truncated"))
         self._trace_observation(observation, started_at)
         return observation
@@ -171,6 +178,62 @@ class ToolExecutor:
                 "duration_ms": round((time.perf_counter() - started_at) * 1000, 3),
             },
         )
+
+    def _annotate_security(self, tool_name: str, observation: ToolObservation) -> None:
+        trust_level = trust_level_for_tool(tool_name)
+        trust_level_reason = trust_level_reason_for_tool(tool_name)
+        observation.metadata["trust_level"] = trust_level.value
+        observation.metadata["trust_level_reason"] = trust_level_reason
+        if not observation.ok:
+            return
+        findings = detect_injection(
+            observation.output,
+            source=tool_name,
+            trust_level=trust_level,
+            evidence={
+                "tool_call_id": observation.tool_call_id,
+                "tool": tool_name,
+                "trust_level_reason": trust_level_reason,
+                "metadata": safe_trace_payload(observation.metadata),
+            },
+        )
+        if not findings:
+            return
+        payloads = finding_payloads(findings)
+        observation.metadata["security_findings"] = payloads
+        observation.metadata["injection_detected"] = True
+        for payload in payloads:
+            self._trace("injection_detected", payload)
+
+    def _detect_preview_security(self, tool_name: str, preview_metadata: dict[str, Any]) -> list[dict[str, Any]]:
+        trust_level = trust_level_for_tool(tool_name)
+        trust_level_reason = trust_level_reason_for_tool(tool_name)
+        preview_text = "\n".join(
+            str(value or "")
+            for value in [
+                preview_metadata.get("summary"),
+                preview_metadata.get("diff"),
+                *[
+                    block.get("content", "")
+                    for block in preview_metadata.get("display_blocks", [])
+                    if isinstance(block, dict)
+                ],
+            ]
+        )
+        findings = detect_injection(
+            preview_text,
+            source=f"{tool_name}:preview",
+            trust_level=trust_level,
+            evidence={
+                "tool": tool_name,
+                "paths": preview_metadata.get("paths", []),
+                "trust_level_reason": trust_level_reason,
+            },
+        )
+        payloads = finding_payloads(findings)
+        for payload in payloads:
+            self._trace("injection_detected", payload)
+        return payloads
 
 
 def request_approval(

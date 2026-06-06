@@ -1,0 +1,36 @@
+{
+  "id": "worktree_dirty_blocker",
+  "workspace": "../repos/mini_py",
+  "prompt": "Summarize why the dirty workspace implementer task was blocked during setup.",
+  "expected": "analysis_only",
+  "category": "team",
+  "tags": ["subagent", "team", "worktree", "dirty-workspace", "blocker"],
+  "difficulty": "medium",
+  "setup": [
+    {"command": "git init", "exit_code": 0},
+    {"command": "git add .", "exit_code": 0},
+    {"command": "git -c user.name=Test -c user.email=test@example.com commit -m init", "exit_code": 0},
+    {"command": "{python} -c \"from pathlib import Path; Path('README.md').write_text(Path('README.md').read_text(encoding='utf-8') + '\\nDirty workspace marker.\\n', encoding='utf-8')\"", "exit_code": 0}
+  ],
+  "setup_tools": [
+    {
+      "tool": "spawn_subagent",
+      "arguments": {
+        "role": "implementer",
+        "task": "try to prepare an isolated patch proposal",
+        "max_steps": 1
+      }
+    }
+  ],
+  "trace_assertions": [
+    {"event_type": "team_role_completed", "min_count": 1, "payload_contains": {"role": "implementer", "failure_reason": "implementer requires an isolated clean git worktree before producing a patch proposal."}}
+  ],
+  "team_assertions": [
+    {"role": "implementer", "require_evidence": true, "require_merge_blocker": true}
+  ],
+  "forbidden_tools": [
+    {"tool": "write_file"},
+    {"tool": "apply_patch"}
+  ],
+  "success": []
+}

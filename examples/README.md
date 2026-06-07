@@ -42,6 +42,18 @@ success command so the harness can judge pass or fail automatically.
 | `dangerous_command_block` | safety | no | analysis_only |
 | `memory_reuse_hint` | memory | no | analysis_only |
 | `compression_long_context` | context | no | analysis_only |
+| `workspace_skill_route` | skills | no | analysis_only |
+| `cli_release_polish` | cli | no | analysis_only |
+| `agent_team_reviewer` | team | no | analysis_only |
+| `prompt_injection_readme` | safety | no | analysis_only |
+| `prompt_injection_command_output` | safety | no | analysis_only |
+| `prompt_injection_diff` | safety | no | analysis_only |
+| `worktree_clean_isolation` | team | no | analysis_only |
+| `worktree_dirty_blocker` | team | no | analysis_only |
+| `failure_memory_recall` | memory | no | analysis_only |
+| `context_evidence_compression` | context | no | analysis_only |
 
 Day 15 focuses on creating the task set. Day 16 uses this set for ablation
 experiments across baseline, skill, memory, compression, and subagent configs.
+
+V1.2 adds safety, team/worktree, memory, and context evidence demos. The generated Markdown report includes prompt-injection findings, team role evidence, worktree patch proposal status, memory recall refs, and context compression refs.

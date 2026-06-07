@@ -1,8 +1,49 @@
 # MiniCode Agent
 
-MiniCode Agent 是一个本地 Coding Agent Runtime。它把模型规划、工具调用、权限审批、技能路由、记忆、上下文压缩、子 Agent 和评测 Harness 放在同一个可运行的本地框架里，适合用来学习、验证和迭代 Claude Code 风格的代码 Agent。
+MiniCode Agent 是一个本地 AI Coding Agent Runtime，参考 Claude Code 风格的 Query Loop + Tool Use 架构实现。项目把模型规划、工具调用、权限审批、技能路由、记忆沉淀、上下文压缩、Agent Team、Git Worktree 隔离执行、安全审查和评测 Harness 放在同一个可运行的本地框架里，目标是构建一个可控、可观测、可评测的代码 Agent 系统，而不是简单的 prompt demo。
 
-V1 的目标不是做一个“聊天壳”，而是提供一条完整闭环：
+## V1.2 交付状态
+
+- 22 个本地 benchmark task，覆盖 debugging、feature、docs、safety、skills、memory、context、team/worktree。
+- 最新 `full` 配置 eval：`22/22 passed`，`pass_rate: 100.00%`。
+- 最新报告：`.minicode/evals/full/eval_20260607_093707_451286_f8be7e/report.md`。
+- 全量测试：`353 passed`。
+- Eval report 支持 `Safety Evidence`、`Team Evidence`、`Worktree Evidence`、`Memory Evidence`、`Context Compression Evidence`，可以直接展示 prompt injection、权限拒绝、patch proposal、memory recall 和压缩证据。
+
+## 核心亮点
+
+- Skill 能力体系：基于 metadata、aliases、tags、适用边界和示例进行任务路由，并支持可选 LLM rerank。
+- Memory System：支持项目记忆、用户偏好、流程经验和 failure memory，写入经过 deterministic admission、secret rejection、duplicate/conflict/stale 策略。
+- Context Compression：用 `ContextFrame`、`EvidenceRef` 和分类 evidence refs 保留长上下文中的失败、diff、测试证据。
+- Agent Team：主 Agent 统一调度 explorer、reviewer、tester、security-reviewer、implementer，子 Agent 通过受限 Tool Call 返回结构化 evidence。
+- Git Worktree Isolation：clean repo 中创建隔离 worktree，implementer 只产出 patch proposal，不自动 merge；dirty repo 返回 blocker。
+- Safety & Audit：统一权限网关、危险命令阻断、Prompt Injection 检测、trace redaction 和 eval report 证据展示。
+
+## 架构速览
+
+```text
+User Task
+-> AgentLoop
+-> Skill Routing / Memory Recall / ContextFrame
+-> Tool Runtime
+-> PermissionPolicy / Prompt Injection Guard / TraceStore
+-> Agent Team / Worktree Isolation
+-> Eval Harness / Evidence Report
+```
+
+## 快速 Demo
+
+```powershell
+E:\conda\envs\minicode\python.exe -m pytest -q
+E:\conda\envs\minicode\Scripts\minicode.exe eval examples\tasks --workspace . --config full
+E:\conda\envs\minicode\Scripts\minicode.exe eval examples\tasks\19_worktree_clean_isolation.json --workspace . --config full
+```
+
+生成的 Markdown report 位于 `.minicode/evals/`，可直接用于展示 V1.2 的安全、协作、隔离执行、记忆和上下文压缩能力。
+
+## 项目目标
+
+V1.2 的目标不是做一个“聊天壳”，而是提供一条完整闭环：
 
 - 理解用户意图，区分日常对话和需要操作工作区的编码任务
 - 通过工具读取、搜索、修改、创建、追加、删除文件
@@ -291,6 +332,8 @@ src/minicode_agent/
 - [Architecture](docs/architecture.md)
 - [Security](docs/security.md)
 - [Demo Commands](docs/demo.md)
+- [V1.2 Delivery Report](docs/V1.2交付报告.md)
+- [V1.2 Iteration Plan](docs/V1.2迭代文档.md)
 - [V1.1 Iteration Plan](docs/V1.1迭代优化计划.md)
 - [Core Concepts](docs/核心概念说明.md)
 - [Interview Q&A](docs/面试问答.md)

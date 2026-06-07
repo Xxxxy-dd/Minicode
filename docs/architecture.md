@@ -36,6 +36,16 @@ User task
 - `src/minicode_agent/subagents/`: bounded explorer/reviewer agents built on the same tool runtime.
 - `src/minicode_agent/harness/`: local benchmark tasks, reports, and ablation configs.
 
+## V1.2 Evidence Reporting
+
+The harness report is the main V1.2 delivery artifact. It keeps the existing pass-rate and metric tables, then adds per-task trace summaries for:
+
+- safety evidence: prompt-injection findings and permission denials;
+- team evidence: completed roles, evidence refs, merge blockers, and patch proposal ids;
+- worktree evidence: isolated worktree path, branch, cleanup policy, and no-auto-merge status;
+- memory evidence: recalled memory id, score, reason, and evidence refs;
+- context evidence: compression ratio, compressed observation ids, and ContextFrame evidence categories.
+
 ## Design Boundaries
 
 - The model never directly edits files or runs commands; it can only request registered tools.

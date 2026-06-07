@@ -367,6 +367,93 @@ def test_harness_report_includes_memory_and_context_evidence(tmp_path) -> None:
     assert "failures=1" in report
 
 
+def test_harness_report_includes_safety_team_and_worktree_evidence(tmp_path) -> None:
+    trace_store = TraceStore(tmp_path / "trace.db")
+    trace_store.append(
+        "run_day4_report",
+        "injection_detected",
+        {
+            "source": "git_diff",
+            "trust_level": "untrusted_workspace",
+            "evidence": {"rules": [{"rule_id": "approval_bypass"}]},
+        },
+    )
+    trace_store.append(
+        "run_day4_report",
+        "permission_checked",
+        {
+            "tool": "run_shell",
+            "decision": {"mode": "deny", "reason": "dangerous command blocked"},
+        },
+    )
+    trace_store.append(
+        "run_day4_report",
+        "worktree_created",
+        {
+            "worktree_path": str(tmp_path / "repo-team"),
+            "created_branch": "minicode-team-1234",
+            "cleanup_policy": "manual",
+            "created_worktree": True,
+            "will_merge": False,
+            "reason": "clean git workspace isolated",
+        },
+    )
+    trace_store.append(
+        "run_day4_report",
+        "team_role_completed",
+        {
+            "role": "implementer",
+            "ok": True,
+            "tool_calls": 0,
+            "patch_proposal": {"proposal_id": "proposal_123", "will_merge": False},
+            "merge_blockers": ["patch proposal requires central review"],
+            "evidence_refs": [{"type": "patch_proposal", "tool": "git_diff"}],
+        },
+    )
+    trace_store.append(
+        "run_day4_report",
+        "team_finished",
+        {
+            "ok": True,
+            "roles": ["implementer"],
+            "team_report": {
+                "patch_proposals": [{"proposal_id": "proposal_123"}],
+                "merge_blockers": ["patch proposal requires central review"],
+            },
+        },
+    )
+    result = EvalResult(
+        task_id="day4_report",
+        config="full",
+        expected="analysis_only",
+        category="team",
+        tags=["safety", "team", "worktree"],
+        difficulty="medium",
+        prompt="review day4 evidence",
+        source_workspace=str(tmp_path),
+        workspace=str(tmp_path),
+        run_id="run_day4_report",
+        passed=True,
+        agent_ok=True,
+        runtime_seconds=0.1,
+        metrics={},
+        config_features={},
+        trace_path=str(trace_store.storage_path),
+    )
+
+    report = render_report([result])
+
+    assert "### Safety Evidence" in report
+    assert "injection_detected: source=git_diff" in report
+    assert "permission_checked: tool=run_shell mode=deny" in report
+    assert "### Team Evidence" in report
+    assert "team_role_completed: role=implementer" in report
+    assert "proposal_id=proposal_123" in report
+    assert "### Worktree Evidence" in report
+    assert "worktree_created" in report
+    assert "will_merge=False" in report
+
+
 def test_cli_eval_runs_task_file(tmp_path) -> None:
     (tmp_path / "README.md").write_text("# Demo\n", encoding="utf-8")
     task_path = tmp_path / "task.json"

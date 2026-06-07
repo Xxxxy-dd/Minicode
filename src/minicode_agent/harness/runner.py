@@ -343,6 +343,22 @@ def render_trace_evidence_summary(result: EvalResult) -> list[str]:
     lines: list[str] = []
     memory_events = [event for event in events if event.event_type == "memory_recalled"]
     compression_events = [event for event in events if event.event_type == "context_compressed"]
+    safety_events = [
+        event
+        for event in events
+        if event.event_type == "injection_detected"
+        or (
+            event.event_type == "permission_checked"
+            and permission_mode(event.payload) in {"ask", "deny"}
+        )
+    ]
+    team_events = [event for event in events if event.event_type == "team_role_completed"]
+    team_finished_events = [event for event in events if event.event_type == "team_finished"]
+    worktree_events = [
+        event
+        for event in events
+        if event.event_type in {"worktree_created", "worktree_retained", "worktree_cleanup_completed", "worktree_cleanup_failed"}
+    ]
     if memory_events:
         lines.extend(["", "### Memory Evidence"])
         for event in memory_events:
@@ -357,6 +373,56 @@ def render_trace_evidence_summary(result: EvalResult) -> list[str]:
                     f"id={record.get('id')} kind={record.get('kind')} score={record.get('score')} "
                     f"reason={record.get('reason')} evidence_refs=`{evidence}`"
                 )
+    if safety_events:
+        lines.extend(["", "### Safety Evidence"])
+        for event in safety_events[:10]:
+            if event.event_type == "injection_detected":
+                evidence = event.payload.get("evidence") or {}
+                lines.append(
+                    "- injection_detected: "
+                    f"source={event.payload.get('source')} trust={event.payload.get('trust_level')} "
+                    f"rules={compact_json(evidence.get('rules') or event.payload.get('findings') or [])}"
+                )
+            else:
+                mode = permission_mode(event.payload)
+                lines.append(
+                    "- permission_checked: "
+                    f"tool={event.payload.get('tool')} mode={mode} "
+                    f"reason={event.payload.get('reason') or permission_reason(event.payload)}"
+                )
+    if team_events or team_finished_events:
+        lines.extend(["", "### Team Evidence"])
+        for event in team_events[:10]:
+            patch = event.payload.get("patch_proposal") or {}
+            proposal_id = patch.get("proposal_id") if isinstance(patch, dict) else None
+            lines.append(
+                "- team_role_completed: "
+                f"role={event.payload.get('role')} ok={event.payload.get('ok')} "
+                f"tool_calls={event.payload.get('tool_calls')} proposal_id={proposal_id or '(none)'} "
+                f"merge_blockers={compact_json(event.payload.get('merge_blockers') or [])} "
+                f"evidence_refs={compact_json(event.payload.get('evidence_refs') or [])}"
+            )
+        for event in team_finished_events[-2:]:
+            report = event.payload.get("team_report") or {}
+            proposals = report.get("patch_proposals") or []
+            lines.append(
+                "- team_finished: "
+                f"ok={event.payload.get('ok')} roles={event.payload.get('roles', [])} "
+                f"patch_proposals={len(proposals)} "
+                f"merge_blockers={compact_json(report.get('merge_blockers') or [])}"
+            )
+    if worktree_events:
+        lines.extend(["", "### Worktree Evidence"])
+        for event in worktree_events[:10]:
+            lines.append(
+                f"- {event.event_type}: "
+                f"path={event.payload.get('worktree_path') or event.payload.get('suggested_worktree_path')} "
+                f"branch={event.payload.get('created_branch')} "
+                f"cleanup={event.payload.get('cleanup_policy')} "
+                f"created={event.payload.get('created_worktree')} "
+                f"will_merge={event.payload.get('will_merge')} "
+                f"reason={event.payload.get('reason') or event.payload.get('error')}"
+            )
     if compression_events:
         lines.extend(["", "### Context Compression Evidence"])
         for event in compression_events:
@@ -398,6 +464,22 @@ def load_trace_events(trace_path: Path, run_id: str) -> list[TraceEvent]:
 
 def compact_json(value) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+
+def permission_mode(payload: dict) -> str | None:
+    decision = payload.get("decision")
+    if isinstance(decision, dict):
+        return decision.get("mode")
+    if decision is not None:
+        return str(decision)
+    return None
+
+
+def permission_reason(payload: dict) -> str | None:
+    decision = payload.get("decision")
+    if isinstance(decision, dict):
+        return decision.get("reason")
+    return None
 
 
 def render_comparison_report(results: list[EvalResult], report_paths: list[Path]) -> str:

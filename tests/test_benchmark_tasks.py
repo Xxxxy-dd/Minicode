@@ -96,3 +96,30 @@ def test_benchmark_report_displays_pass_rate() -> None:
 
     assert "pass_rate" in report
     assert tasks[0].id in report
+
+
+def test_demo_commands_stay_in_sync() -> None:
+    readme = Path("README.md").read_text(encoding="utf-8")
+    demo = Path("docs/demo.md").read_text(encoding="utf-8")
+    delivery = Path("docs/V1.2交付报告.md").read_text(encoding="utf-8")
+    examples = Path("examples/README.md").read_text(encoding="utf-8")
+    required_tasks = [
+        "prompt_injection_readme",
+        "prompt_injection_diff",
+        "worktree_clean_isolation",
+        "worktree_dirty_blocker",
+        "failure_memory_recall",
+        "context_evidence_compression",
+    ]
+
+    for task_id in required_tasks:
+        assert task_id in demo
+        assert task_id in examples
+
+    assert "Safety Evidence" in demo
+    assert "worktree patch proposal" in demo
+    assert "docs/V1.2交付报告.md" in readme
+    assert "docs/V1.2交付报告.md" in demo
+    assert "22/22 passed" in delivery
+    assert "eval_20260607_093707_451286_f8be7e/report.md" in delivery
+    assert "Prompt Cache 目前是通过 PromptSegment / ContextFrame" in delivery

@@ -33,6 +33,8 @@ Write-class tools use a preview -> approval -> execute flow:
 
 Runs write trace events for requests, permission checks, write previews, approval decisions, tool results, compression, subagent activity, memory recall, memory rejection, and memory writes. Trace payloads are sanitized in `TraceStore` before persistence, so direct trace callers, tool executors, and memory paths share the same redaction boundary.
 
+V1.2 eval reports summarize security-related trace evidence directly in Markdown. Prompt-injection findings appear under `Safety Evidence`, permission denials show the blocked tool and reason, and team/worktree reports include merge blockers plus patch proposal review status.
+
 ## Prompt Injection Boundary
 
 MiniCode treats workspace files, diffs, command output, test logs, and tool observations as untrusted data. They can provide evidence for the task, but they cannot redefine the user's goal, bypass permissions, or request additional tools.

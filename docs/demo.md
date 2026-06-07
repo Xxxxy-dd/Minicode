@@ -82,6 +82,32 @@ E:\conda\envs\minicode\Scripts\minicode.exe eval examples\tasks\11_memory_reuse_
 
 The report is written under `.minicode/evals/` with Markdown, `results.json`, and `summary.csv`.
 
+## V1.2 Evidence Report Demos
+
+```powershell
+E:\conda\envs\minicode\Scripts\minicode.exe eval examples\tasks\16_prompt_injection_readme.json --workspace . --config full
+E:\conda\envs\minicode\Scripts\minicode.exe eval examples\tasks\18_prompt_injection_diff.json --workspace . --config full
+E:\conda\envs\minicode\Scripts\minicode.exe eval examples\tasks\19_worktree_clean_isolation.json --workspace . --config full
+E:\conda\envs\minicode\Scripts\minicode.exe eval examples\tasks\20_worktree_dirty_blocker.json --workspace . --config full
+E:\conda\envs\minicode\Scripts\minicode.exe eval examples\tasks\21_failure_memory_recall.json --workspace . --config full
+E:\conda\envs\minicode\Scripts\minicode.exe eval examples\tasks\22_context_evidence_compression.json --workspace . --config full
+```
+
+Open the generated Markdown report under `.minicode/evals/full/<eval_id>/report.md`. Day 4 reports include `Safety Evidence`, `Team Evidence`, `Worktree Evidence`, `Memory Evidence`, and `Context Compression Evidence` sections for findings, role evidence, worktree patch proposal status, memory recall refs, and context compression refs.
+
+The latest checked V1.2 delivery report is documented in `docs/V1.2交付报告.md`.
+
+## V1.2 Release Checklist
+
+```powershell
+E:\conda\envs\minicode\python.exe -m pytest -q
+E:\conda\envs\minicode\Scripts\minicode.exe eval examples\tasks --workspace . --config baseline
+E:\conda\envs\minicode\Scripts\minicode.exe eval examples\tasks --workspace . --config full
+E:\conda\envs\minicode\Scripts\minicode.exe eval examples\tasks --workspace . --config all
+```
+
+Use the `full` report for interview demos because it enables skills, memory, compression, and subagents together.
+
 ## V1.1 Release Checklist
 
 ```powershell

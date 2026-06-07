@@ -119,6 +119,10 @@ def test_demo_commands_stay_in_sync() -> None:
     assert "Safety Evidence" in demo
     assert "worktree patch proposal" in demo
     assert "docs/V1.2交付报告.md" in readme
+    assert "pass_rate: 100.00%" in readme
+    assert "V1.1 发布检查" not in readme
+    assert "Worktree Isolation" in readme
+    assert "简历描述" in readme
     assert "docs/V1.2交付报告.md" in demo
     assert "22/22 passed" in delivery
     assert "eval_20260607_093707_451286_f8be7e/report.md" in delivery
